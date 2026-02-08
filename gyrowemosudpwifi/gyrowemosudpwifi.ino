@@ -3,14 +3,11 @@
 #include <WiFiUdp.h> // Envio de pacotes UDP
 #include <DFRobot_BMI160.h> // Comunicação com sensor 6 DOF BMI160
 #include <Wire.h> // Conexão I2C
+#include <WiFiManager.h> // Permite configuração do wifi sem regravação
 
 DFRobot_BMI160 bmi160; 
 WiFiUDP udp;
 ESP8266WebServer server(80);
-
-// ====== WIFI ======
-const char* ssid = "SSID do seu wifi";
-const char* password = "suasenha";
 
 // ====== OPENTRACK (PC) ======
 IPAddress pcIP(192,168,0,14); // IP da máquina com OPENTRACK
@@ -105,13 +102,15 @@ void setup() {
 
   calibrateGyro();
 
-  // WiFi
-  WiFi.begin(ssid, password);
-  Serial.print("Conectando no WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // ===== WiFiManager =====
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180);
+
+  if (!wm.autoConnect("HeadTracker-ESP8266")) {
+    Serial.println("Falha ao conectar. Reiniciando...");
+    ESP.restart();
   }
+  
   Serial.println("\nConectado!");
   Serial.print("IP do ESP: ");
   Serial.println(WiFi.localIP());
