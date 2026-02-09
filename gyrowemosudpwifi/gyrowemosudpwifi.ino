@@ -10,7 +10,7 @@ WiFiUDP udp;
 ESP8266WebServer server(80);
 
 // ====== OPENTRACK (PC) ======
-IPAddress pcIP(192,168,0,14); // IP da máquina com OPENTRACK
+IPAddress pcIP(192,168,0,9); // IP da máquina com OPENTRACK
 const unsigned int pcPort = 4242; // porta usada pelo OPENTRACK
 
 // ====== BMI160 ======
