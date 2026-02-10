@@ -10,7 +10,7 @@ WiFiUDP udp;
 ESP8266WebServer server(80);
 
 // ====== OPENTRACK (PC) ======
-IPAddress pcIP(192,168,0,9); // IP da máquina com OPENTRACK
+IPAddress pcIP(192,168,0,7); // IP da máquina com OPENTRACK
 const unsigned int pcPort = 4242; // porta usada pelo OPENTRACK
 
 // ====== BMI160 ======
@@ -18,6 +18,9 @@ const int8_t i2c_addr = 0x69;
 
 float ax, ay, az;
 float pitch, roll, yaw = 0;
+
+float pitchAcc = 0, rollAcc = 0;
+const float alpha = 0.98;  // maior =+ confiança no gyro
 
 float gyroX_offset = 0;
 float gyroY_offset = 0;
@@ -134,13 +137,25 @@ void loop() {
   if (bmi160.getAccelGyroData(data) == BMI160_OK) {
 
     // Gyro X, Y, Z → Pitch, Roll, Yaw
-    float gx = (data[0] - gyroX_offset) * (PI / 180.0) / 16.4;
+    float gx = (data[0] - gyroX_offset) / 16.4;
     float gy = (data[1] - gyroY_offset) / 16.4;
     float gz = (data[2] - gyroZ_offset) * (PI / 180.0) / 16.4;
 
-    pitch += gx * dt * 180.0 / PI;
+    pitch += gx * dt;
     roll  += gy * dt;
     yaw   += gz * dt * 180.0 / PI;
+
+    float ax = data[3] / 16384.0;
+    float ay = data[4] / 16384.0;
+    float az = data[5] / 16384.0;
+
+    // Ângulos pelo acelerômetro
+    pitchAcc = atan2(ay, az) * 180.0 / PI;
+    rollAcc  = atan2(-ax, sqrt(ay*ay + az*az)) * 180.0 / PI;
+
+    // ===== Filtro complementar =====
+    pitch = alpha * pitch + (1.0 - alpha) * pitchAcc;
+    roll  = alpha * roll  + (1.0 - alpha) * rollAcc;
 
     // ===== Envio UDP =====
     double pkt[6];
