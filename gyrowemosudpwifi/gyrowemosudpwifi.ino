@@ -10,7 +10,7 @@ WiFiUDP udp;
 ESP8266WebServer server(80);
 
 // ====== OPENTRACK (PC) ======
-IPAddress pcIP(192,168,0,7); // IP da máquina com OPENTRACK
+IPAddress pcIP(192,168,0,14); // IP da máquina com OPENTRACK
 const unsigned int pcPort = 4242; // porta usada pelo OPENTRACK
 
 // ====== BMI160 ======
@@ -157,6 +157,10 @@ void loop() {
     pitch = alpha * pitch + (1.0 - alpha) * pitchAcc;
     roll  = alpha * roll  + (1.0 - alpha) * rollAcc;
 
+    if(abs(roll) > 48){
+      yaw = 0;
+    }
+
     // ===== Envio UDP =====
     double pkt[6];
     pkt[0] = 0.0;    // X
@@ -172,5 +176,5 @@ void loop() {
 
   }
 
-  delay(10);
+  delay(2);
 }
