@@ -1,0 +1,16 @@
+{
+  "jsonid": "vive_controller_profile",
+  "controller_type": "vive_controller",
+  "binding_url_main_controller": "",
+  "components": {
+    "overall": {
+      "haptics": "/input/haptics",
+      "position": "/input/position",
+      "rotation": "/input/rotation"
+    },
+    "trigger": {
+      "click": "/input/trigger/click",
+      "value": "/input/trigger/value"
+    }
+  }
+}

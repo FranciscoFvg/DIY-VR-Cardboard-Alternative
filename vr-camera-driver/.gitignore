@@ -1,0 +1,41 @@
+# .gitignore para CameraVR
+
+# Build
+build/
+cmake-build-*/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# OpenVR SDK (baixar separadamente)
+libs/openvr/
+
+# Calibração
+camera_calibration.npz
+*.png
+*.jpg
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Sistema
+.DS_Store
+Thumbs.db
