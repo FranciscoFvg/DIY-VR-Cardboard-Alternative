@@ -98,7 +98,26 @@ void calibrateGyro()
 void handleRoot()
 {
   String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'>"
                 "<title>Head Tracker ESP8266</title>"
+                "<style>"
+                "body{font-family:Arial,Helvetica,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px;}"
+                ".card{max-width:560px;margin:0 auto;background:#111827;border:1px solid #1f2937;"
+                "border-radius:16px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,.35);}"
+                "h2{margin:0 0 12px 0;font-size:22px;color:#f8fafc;}"
+                ".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}"
+                ".item{background:#0b1220;border:1px solid #1f2937;border-radius:12px;padding:12px;}"
+                ".label{font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;}"
+                ".value{font-size:20px;font-weight:700;color:#e2e8f0;}"
+                ".line{height:1px;background:#1f2937;margin:16px 0;}"
+                "input{width:100%;padding:10px;border-radius:10px;border:1px solid #334155;"
+                "background:#0b1220;color:#e2e8f0;box-sizing:border-box;}"
+                "button{padding:10px 14px;border:0;border-radius:10px;background:#22c55e;color:#0f172a;"
+                "font-weight:700;cursor:pointer;}"
+                "button.secondary{background:#38bdf8;}"
+                "form{margin:0;display:flex;flex-direction:column;gap:10px;}"
+                "@media (max-width:520px){.grid{grid-template-columns:1fr;}}"
+                "</style>"
                 "<script>"
                 "setInterval(function(){"
                 "fetch('/status').then(r=>r.json()).then(d=>{"
@@ -107,27 +126,35 @@ void handleRoot()
                 "document.getElementById('yaw').textContent=d.yaw;"
                 "document.getElementById('dest').textContent=d.dest;"
                 "});"
-                "}, 300);"
+                "}, 50);"
                 "</script>"
                 "</head><body>"
+                "<div class='card'>"
                 "<h2>Head Tracker - ESP8266</h2>"
-                "<p><b>Pitch:</b> <span id='pitch'>" +
-                String(pitch, 2) + "</span></p>"
-                                   "<p><b>Roll:</b> <span id='roll'>" +
-                String(roll, 2) + "</span></p>"
-                                  "<p><b>Yaw:</b> <span id='yaw'>" +
-                String(yaw, 2) + "</span></p>"
-                                 "<p><b>IP:</b> " +
-                WiFi.localIP().toString() + "</p>"
-                                            "<p><b>Destino:</b> <span id='dest'>" +
-                pcIP.toString() + ":" + String(pcPort) + "</span></p>"
-                                                         "<form action='/reset'><button type='submit'>Zerar Yaw</button></form>"
-                                                         "<hr>"
+                "<div class='grid'>"
+                "<div class='item'><div class='label'>Pitch</div><div class='value' id='pitch'>" +
+                String(pitch, 2) + "</div></div>"
+                                   "<div class='item'><div class='label'>Roll</div><div class='value' id='roll'>" +
+                String(roll, 2) + "</div></div>"
+                                  "<div class='item'><div class='label'>Yaw</div><div class='value' id='yaw'>" +
+                String(yaw, 2) + "</div></div>"
+                                 "<div class='item'><div class='label'>IP ESP</div><div class='value'>" +
+                WiFi.localIP().toString() + "</div></div>"
+                                            "<div class='item' style='grid-column:1/-1;'><div class='label'>Destino UDP</div>"
+                                            "<div class='value' id='dest'>" +
+                pcIP.toString() + ":" + String(pcPort) + "</div></div>"
+                                                         "</div>"
+                                                         "<div class='line'></div>"
+                                                         "<form action='/reset'>"
+                                                         "<button class='secondary' type='submit'>Zerar Yaw</button>"
+                                                         "</form>"
+                                                         "<div class='line'></div>"
                                                          "<form action='/setIP' method='get'>"
-                                                         "IP destino: <input name='ip' placeholder='192.168.0.14'><br>"
-                                                         "Porta: <input name='port' placeholder='4242'><br>"
+                                                         "<input name='ip' placeholder='IP destino (ex: 192.168.0.14)'>"
+                                                         "<input name='port' placeholder='Porta (ex: 4242)'>"
                                                          "<button type='submit'>Salvar destino</button>"
                                                          "</form>"
+                                                         "</div>"
                                                          "</body></html>";
 
   server.send(200, "text/html", html);
@@ -190,6 +217,7 @@ void setup()
   delay(2000);
 
   EEPROM.begin(64); // Inicializa a EEPROM para armazenamento de dados
+  loadUdpConfig();  // Carrega configuração UDP salva (se existir)
 
   // I2C ESP8266
   Wire.begin(D2, D1);
