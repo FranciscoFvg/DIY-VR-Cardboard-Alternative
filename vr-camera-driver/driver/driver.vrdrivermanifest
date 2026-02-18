@@ -1,6 +1,5 @@
 {
     "alwaysActivate": true,
     "name": "cameravr",
-    "directory": "",
-    "hmd_presence": [ "*" ]
+    "directory": ""
 }

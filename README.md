@@ -18,9 +18,11 @@ Dito isto, este projeto usa os seguinte componentes:
 Além dos componentes de hardware também existem ferramentas de software que devem ser instaladas:
 
 - Arduino IDE (https://www.arduino.cc/en/software/)
-- OpenTrack (https://github.com/opentrack/opentrack)
+- OpenTrack (https://github.com/opentrack/opentrack) - Opcional (modo legado)
 - SteamVR (https://store.steampowered.com/app/250820/SteamVR/)
 - Parsec (https://parsec.app/downloads) - Opcional (qualquer software de streaming de tela)
+
+> Observação: o projeto também suporta rastreamento direto Arduino → driver OpenVR via Wi-Fi UDP, sem OpenTrack.
 
 ## Instalação (WEMOS)
 

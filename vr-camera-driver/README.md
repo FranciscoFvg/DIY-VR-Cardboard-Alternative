@@ -2,10 +2,13 @@
 
 Sistema completo de rastreamento 6DoF para **SteamVR** usando **câmera** e **MediaPipe Hands**.
 
+Agora o projeto também suporta **HMD virtual via Arduino (ESP8266) por Wi-Fi UDP**, sem OpenTrack.
+
 ## 📋 Arquitetura
 
 ```
 Câmera → MediaPipe Hands → Pose 6DoF → Filtro → Driver OpenVR → SteamVR
+Arduino (ESP8266 + BMI160) → UDP (porta 4242) → Driver OpenVR (HMD) → SteamVR
 ```
 
 ## 🔧 Componentes
@@ -20,6 +23,12 @@ Câmera → MediaPipe Hands → Pose 6DoF → Filtro → Driver OpenVR → Steam
 - Recebe poses por UDP (enviadas pelo script MediaPipe)
 - Suporta maos esquerda/direita
 - Tolerante a perda de frames
+
+### 2.1 **ArduinoHeadReceiver** (`src/ArduinoHeadReceiver.cpp`)
+
+- Recebe head tracking do ESP8266 por UDP na porta `4242`
+- Formato compatível com OpenTrack: 6 `double` (`x,y,z,yaw,pitch,roll`)
+- Converte yaw/pitch/roll para quaternion e publica para o HMD virtual
 
 ### 3. **hand_tracker.py**
 
@@ -49,6 +58,7 @@ Câmera → MediaPipe Hands → Pose 6DoF → Filtro → Driver OpenVR → Steam
 
 - Driver OpenVR completo
 - Gerencia múltiplos controladores
+- Registra um HMD virtual para rotação de cabeça via Arduino
 - Entry point: `HmdDriverFactory`
 
 ## 📦 Dependências
@@ -137,11 +147,18 @@ copy build\Release\driver_cameravr.dll "C:\...\cameravr\bin\win64\"
 ### 4. Executar
 
 ```powershell
-# Executar aplicacao
-.\build\Release\CameraVRApp.exe
-
-# Ou integrar na DLL para rodar automaticamente com SteamVR
+# Deploy do driver + abrir SteamVR + iniciar GUI Python
+.\run_all.bat
 ```
+
+O `CameraVRApp.exe` não é necessário para o fluxo normal. O tracking roda no próprio driver OpenVR carregado pelo SteamVR.
+
+### 5. Head tracking direto via Arduino (sem OpenTrack)
+
+- No sketch do ESP8266, configure o IP do PC e mantenha a porta `4242`.
+- Garanta que PC e ESP8266 estejam na mesma rede Wi-Fi.
+- Inicie o SteamVR com o driver `cameravr` instalado.
+- O HMD virtual passa a receber rotação diretamente do UDP enviado pelo Arduino.
 
 ## 📐 Ajustes
 

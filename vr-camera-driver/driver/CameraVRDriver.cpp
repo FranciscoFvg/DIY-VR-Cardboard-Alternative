@@ -1,5 +1,6 @@
 #include "CameraVRDriver.h"
 #include "../include/HandPoseReceiver.h"
+#include "../include/ArduinoHeadReceiver.h"
 #include "../include/PoseEstimator.h"
 #include "../include/PoseFilter.h"
 #include <iostream>
@@ -29,6 +30,8 @@ EVRInitError CameraVRDriver::Init(IVRDriverContext *pDriverContext)
     std::cout << "VRServerDriverHost: " << (VRServerDriverHost() ? "VÁLIDO" : "NULL") << std::endl;
     std::cout << "========================================" << std::endl;
 
+    AddHmd();
+
     // Adicionar 2 controladores por padrão
     AddController(0); // Esquerdo
     AddController(1); // Direito
@@ -42,6 +45,7 @@ EVRInitError CameraVRDriver::Init(IVRDriverContext *pDriverContext)
 void CameraVRDriver::Cleanup()
 {
     StopTrackingThread();
+    hmd_.reset();
     controllers_.clear();
     VR_CLEANUP_SERVER_DRIVER_CONTEXT();
 }
@@ -68,6 +72,33 @@ void CameraVRDriver::EnterStandby()
 
 void CameraVRDriver::LeaveStandby()
 {
+}
+
+void CameraVRDriver::AddHmd()
+{
+    hmd_ = std::make_shared<VirtualHMD>();
+
+    if (!VRServerDriverHost())
+    {
+        std::cerr << "ERRO: VRServerDriverHost() é NULL ao tentar adicionar HMD" << std::endl;
+        hmd_.reset();
+        return;
+    }
+
+    bool success = VRServerDriverHost()->TrackedDeviceAdded(
+        hmd_->GetSerialNumber().c_str(),
+        TrackedDeviceClass_HMD,
+        hmd_.get());
+
+    if (success)
+    {
+        std::cout << "[CameraVRDriver] HMD virtual adicionado com sucesso!" << std::endl;
+    }
+    else
+    {
+        std::cerr << "[CameraVRDriver] ERRO: Falha ao adicionar HMD virtual" << std::endl;
+        hmd_.reset();
+    }
 }
 
 void CameraVRDriver::AddController(int controllerId)
@@ -132,6 +163,9 @@ void CameraVRDriver::StartTrackingThread()
     receiver_ = std::make_unique<HandPoseReceiver>(7000);
     receiver_->start();
 
+    arduinoHeadReceiver_ = std::make_unique<ArduinoHeadReceiver>(4242);
+    arduinoHeadReceiver_->start();
+
     poseEstimator_ = std::make_unique<PoseEstimator>();
     leftFilter_ = std::make_unique<PoseFilter>();
     rightFilter_ = std::make_unique<PoseFilter>();
@@ -158,6 +192,9 @@ void CameraVRDriver::StopTrackingThread()
     if (receiver_)
         receiver_->stop();
 
+    if (arduinoHeadReceiver_)
+        arduinoHeadReceiver_->stop();
+
     std::cout << "[CameraVRDriver] Thread de tracking parada!" << std::endl;
 }
 
@@ -173,6 +210,12 @@ void CameraVRDriver::TrackingLoop()
 
         if (!receiver_)
             break;
+
+        if (hmd_ && arduinoHeadReceiver_)
+        {
+            Pose6DoF headPose = arduinoHeadReceiver_->getLatestPose();
+            hmd_->UpdatePose(headPose);
+        }
 
         Pose6DoF leftPose = receiver_->getLatestPose(HandPoseReceiver::Hand::Left);
         Pose6DoF rightPose = receiver_->getLatestPose(HandPoseReceiver::Hand::Right);

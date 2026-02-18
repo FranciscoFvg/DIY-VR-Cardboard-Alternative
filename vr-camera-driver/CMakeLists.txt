@@ -4,6 +4,8 @@ project(CameraVR VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(BUILD_CAMERAVR_APP "Build standalone CameraVRApp executable (debug/testing only)" OFF)
+
 # Eigen
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
@@ -32,6 +34,7 @@ add_library(CameraVRVision STATIC
     src/PoseEstimator.cpp
     src/PoseFilter.cpp
     src/HandPoseReceiver.cpp
+    src/ArduinoHeadReceiver.cpp
 )
 
 target_link_libraries(CameraVRVision
@@ -43,6 +46,7 @@ target_link_libraries(CameraVRVision
 add_library(driver_cameravr SHARED
     driver/CameraVRDriver.cpp
     driver/VirtualController.cpp
+    driver/VirtualHMD.cpp
 )
 
 target_link_libraries(driver_cameravr
@@ -55,17 +59,20 @@ set_target_properties(driver_cameravr PROPERTIES
     PREFIX ""
 )
 
-# Aplicação principal
-add_executable(CameraVRApp
-    src/main.cpp
-    driver/CameraVRDriver.cpp
-    driver/VirtualController.cpp
-)
+if(BUILD_CAMERAVR_APP)
+    # Aplicação principal (opcional, para debug/testes locais)
+    add_executable(CameraVRApp
+        src/main.cpp
+        driver/CameraVRDriver.cpp
+        driver/VirtualController.cpp
+        driver/VirtualHMD.cpp
+    )
 
-target_link_libraries(CameraVRApp
-    CameraVRVision
-    openvr_api
-)
+    target_link_libraries(CameraVRApp
+        CameraVRVision
+        openvr_api
+    )
+endif()
 
 # Instalar
 install(TARGETS driver_cameravr
@@ -73,6 +80,8 @@ install(TARGETS driver_cameravr
     LIBRARY DESTINATION bin
 )
 
-install(TARGETS CameraVRApp
-    RUNTIME DESTINATION bin
-)
+if(BUILD_CAMERAVR_APP)
+    install(TARGETS CameraVRApp
+        RUNTIME DESTINATION bin
+    )
+endif()

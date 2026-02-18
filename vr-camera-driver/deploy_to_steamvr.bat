@@ -12,7 +12,7 @@ if not exist "%STEAMVR_DIR%\bin\win64\vrpathreg.exe" (
 
 set "DRIVER_DIR=%STEAMVR_DIR%\drivers\cameravr"
 set "BIN_DIR=%DRIVER_DIR%\bin\win64"
-set "INPUT_DIR=%DRIVER_DIR%\input"
+set "INPUT_DIR=%DRIVER_DIR%\resources\input"
 
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 if not exist "%INPUT_DIR%" mkdir "%INPUT_DIR%"

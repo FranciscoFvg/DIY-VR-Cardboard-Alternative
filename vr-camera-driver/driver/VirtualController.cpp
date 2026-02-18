@@ -57,7 +57,7 @@ EVRInitError VirtualController::Activate(uint32_t unObjectId)
 
     // Input profile
     VRProperties()->SetStringProperty(propertyContainer_, Prop_InputProfilePath_String,
-                                      "{cameravr}/input/controller_profile.json");
+                                      "{htc}/input/vive_controller_profile.json");
 
     // Capacidades
     VRProperties()->SetBoolProperty(propertyContainer_, Prop_WillDriftInYaw_Bool, false);
