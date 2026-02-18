@@ -21,6 +21,10 @@ public:
     void reset();
     void setAlpha(double alpha) { alpha_ = alpha; }      // Para complementar (0-1)
     void setWindowSize(int size) { windowSize_ = size; } // Para média móvel
+    void setPositionDeadband(double meters) { positionDeadband_ = meters; }
+    void setRotationDeadbandRad(double radians) { rotationDeadbandRad_ = radians; }
+    void setMaxPositionSpeed(double metersPerSecond) { maxPositionSpeed_ = metersPerSecond; }
+    void setMaxRotationSpeedRad(double radiansPerSecond) { maxRotationSpeedRad_ = radiansPerSecond; }
 
 private:
     // Estado do filtro
@@ -31,6 +35,10 @@ private:
     // Parâmetros
     double alpha_; // Complementar: quanto confiar na medição (vs integração)
     int windowSize_;
+    double positionDeadband_;
+    double rotationDeadbandRad_;
+    double maxPositionSpeed_;
+    double maxRotationSpeedRad_;
 
     // Histórico para média móvel
     std::deque<Pose6DoF> poseHistory_;

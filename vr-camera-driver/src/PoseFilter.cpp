@@ -1,8 +1,16 @@
 #include "PoseFilter.h"
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 
 PoseFilter::PoseFilter()
-    : initialized_(false), alpha_(0.7), windowSize_(5)
+    : initialized_(false),
+      alpha_(0.7),
+      windowSize_(5),
+      positionDeadband_(0.004),
+      rotationDeadbandRad_(0.035),
+      maxPositionSpeed_(3.0),
+      maxRotationSpeedRad_(6.0)
 {
     initializeKalman();
 }
@@ -36,18 +44,75 @@ Pose6DoF PoseFilter::filterComplementary(const Pose6DoF &measuredPose, double dt
         return filteredPose_; // Manter última pose válida
     }
 
-    // Filtro complementar: mistura medição com predição
-    // pose_filtered = alpha * measurement + (1-alpha) * previous
+    // Filtro complementar com estabilização:
+    // 1) rejeição de microvariação (deadband)
+    // 2) limite de velocidade para evitar saltos
+    // 3) alpha adaptativo (mais suave parado)
 
     Pose6DoF result;
     result.timestamp = measuredPose.timestamp;
     result.valid = true;
 
+    const double safeDt = std::clamp(dt, 1e-3, 0.05);
+
+    Eigen::Vector3d measuredPosition = measuredPose.position;
+    Eigen::Quaterniond measuredRotation = measuredPose.rotation;
+    measuredRotation.normalize();
+
+    // Evitar flip de quaternion entre frames (q e -q representam a mesma rotação)
+    if (filteredPose_.rotation.dot(measuredRotation) < 0.0)
+    {
+        measuredRotation.coeffs() *= -1.0;
+    }
+
+    Eigen::Vector3d positionDelta = measuredPosition - filteredPose_.position;
+    const double positionError = positionDelta.norm();
+
+    double cosHalfAngle = std::abs(filteredPose_.rotation.dot(measuredRotation));
+    cosHalfAngle = std::clamp(cosHalfAngle, -1.0, 1.0);
+    const double rotationError = 2.0 * std::acos(cosHalfAngle);
+
+    // Deadband para eliminar tremor quando quase parado
+    if (positionError <= positionDeadband_)
+    {
+        measuredPosition = filteredPose_.position;
+    }
+
+    if (rotationError <= rotationDeadbandRad_)
+    {
+        measuredRotation = filteredPose_.rotation;
+    }
+
+    // Limitar variação máxima por frame para reduzir picos
+    Eigen::Vector3d limitedDelta = measuredPosition - filteredPose_.position;
+    const double maxPositionStep = maxPositionSpeed_ * safeDt;
+    const double limitedNorm = limitedDelta.norm();
+    if (limitedNorm > maxPositionStep && limitedNorm > 1e-9)
+    {
+        limitedDelta *= (maxPositionStep / limitedNorm);
+        measuredPosition = filteredPose_.position + limitedDelta;
+    }
+
+    const double maxRotationStep = maxRotationSpeedRad_ * safeDt;
+    double blendRotationAlpha = alpha_;
+    if (rotationError > 1e-6)
+    {
+        blendRotationAlpha = std::min(alpha_, maxRotationStep / rotationError);
+    }
+
+    // Mais suavização para movimentos pequenos
+    double blendPositionAlpha = alpha_;
+    if (positionError < positionDeadband_ * 4.0 && rotationError < rotationDeadbandRad_ * 4.0)
+    {
+        blendPositionAlpha = std::min(alpha_, 0.35);
+        blendRotationAlpha = std::min(blendRotationAlpha, 0.35);
+    }
+
     // Posição
-    result.position = alpha_ * measuredPose.position + (1.0 - alpha_) * filteredPose_.position;
+    result.position = blendPositionAlpha * measuredPosition + (1.0 - blendPositionAlpha) * filteredPose_.position;
 
     // Rotação (SLERP para interpolar quaternions)
-    result.rotation = filteredPose_.rotation.slerp(alpha_, measuredPose.rotation);
+    result.rotation = filteredPose_.rotation.slerp(blendRotationAlpha, measuredRotation);
     result.rotation.normalize();
 
     // Atualizar matriz

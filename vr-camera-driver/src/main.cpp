@@ -18,8 +18,12 @@ int main()
     PoseEstimator poseEstimator;
     PoseFilter leftFilter;
     PoseFilter rightFilter;
-    leftFilter.setAlpha(0.7);  // Filtro complementar
-    rightFilter.setAlpha(0.7); // Filtro complementar
+    leftFilter.setAlpha(0.55);
+    rightFilter.setAlpha(0.55);
+    leftFilter.setPositionDeadband(0.005);
+    rightFilter.setPositionDeadband(0.005);
+    leftFilter.setRotationDeadbandRad(0.045);
+    rightFilter.setRotationDeadbandRad(0.045);
 
     struct PoseState
     {
