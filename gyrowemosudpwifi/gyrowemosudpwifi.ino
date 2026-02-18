@@ -38,6 +38,16 @@ struct UdpConfig
 };
 const uint32_t UDP_MAGIC = 0x55445031; // "UDP1"
 
+struct CalibrationData
+{
+  uint32_t magic;
+  float gyroX_offset;
+  float gyroY_offset;
+  float gyroZ_offset;
+};
+const uint32_t CALIB_MAGIC = 0x43414C31; // "CAL1"
+
+
 void loadUdpConfig()
 {
   UdpConfig cfg;
@@ -61,6 +71,43 @@ void saveUdpConfig()
 
   EEPROM.put(0, cfg);
   EEPROM.commit();
+}
+
+bool loadCalibration()
+{
+  CalibrationData cal;
+  EEPROM.get(sizeof(UdpConfig), cal);
+  
+  if (cal.magic == CALIB_MAGIC)
+  {
+    gyroX_offset = cal.gyroX_offset;
+    gyroY_offset = cal.gyroY_offset;
+    gyroZ_offset = cal.gyroZ_offset;
+    
+    Serial.println("Calibração carregada da EEPROM:");
+    Serial.print("Offset Gyro X = ");
+    Serial.println(gyroX_offset);
+    Serial.print("Offset Gyro Y = ");
+    Serial.println(gyroY_offset);
+    Serial.print("Offset Gyro Z = ");
+    Serial.println(gyroZ_offset);
+    return true;
+  }
+  return false;
+}
+
+void saveCalibration()
+{
+  CalibrationData cal;
+  cal.magic = CALIB_MAGIC;
+  cal.gyroX_offset = gyroX_offset;
+  cal.gyroY_offset = gyroY_offset;
+  cal.gyroZ_offset = gyroZ_offset;
+  
+  EEPROM.put(sizeof(UdpConfig), cal);
+  EEPROM.commit();
+  
+  Serial.println("Calibração salva na EEPROM!");
 }
 
 // ====== CALIBRAÇÃO ======
@@ -92,6 +139,8 @@ void calibrateGyro()
   Serial.println(gyroY_offset);
   Serial.print("Offset Gyro Z = ");
   Serial.println(gyroZ_offset);
+
+  saveCalibration();
 }
 
 // ====== WEB ======
@@ -115,6 +164,7 @@ void handleRoot()
                 "button{padding:10px 14px;border:0;border-radius:10px;background:#22c55e;color:#0f172a;"
                 "font-weight:700;cursor:pointer;}"
                 "button.secondary{background:#38bdf8;}"
+                "button.warning{background:#f59e0b;}"
                 "form{margin:0;display:flex;flex-direction:column;gap:10px;}"
                 "@media (max-width:520px){.grid{grid-template-columns:1fr;}}"
                 "</style>"
@@ -149,6 +199,10 @@ void handleRoot()
                                                          "<button class='secondary' type='submit'>Zerar Yaw</button>"
                                                          "</form>"
                                                          "<div class='line'></div>"
+                                                         "<form action='/calibrate' onsubmit='return confirm(\"Coloque o sensor em superfície plana. Continuar?\");'>"
+                                                         "<button class='warning' type='submit'>Recalibrar Giroscópio</button>"
+                                                         "</form>"
+                                                         "<div class='line'></div>"
                                                          "<form action='/setIP' method='get'>"
                                                          "<input name='ip' placeholder='IP destino (ex: 192.168.0.14)'>"
                                                          "<input name='port' placeholder='Porta (ex: 4242)'>"
@@ -158,6 +212,37 @@ void handleRoot()
                                                          "</body></html>";
 
   server.send(200, "text/html", html);
+}
+
+void handleCalibrate()
+{
+  String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                "<title>Calibrando...</title>"
+                "<style>"
+                "body{font-family:Arial,Helvetica,sans-serif;background:#0f172a;color:#e2e8f0;"
+                "display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}"
+                ".card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:32px;"
+                "text-align:center;max-width:400px;}"
+                ".spinner{border:4px solid #1f2937;border-top:4px solid #f59e0b;border-radius:50%;"
+                "width:48px;height:48px;animation:spin 1s linear infinite;margin:0 auto 20px;}"
+                "@keyframes spin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}"
+                "h2{color:#f8fafc;margin:0 0 12px;}"
+                "p{color:#94a3b8;margin:0;}"
+                "</style>"
+                "<meta http-equiv='refresh' content='8;url=/'>"
+                "</head><body>"
+                "<div class='card'>"
+                "<div class='spinner'></div>"
+                "<h2>Calibrando Giroscópio</h2>"
+                "<p>NÃO MEXA O SENSOR!<br>Redirecionando em 8 segundos...</p>"
+                "</div>"
+                "</body></html>";
+  
+  server.send(200, "text/html", html);
+  
+  delay(500);
+  calibrateGyro();
 }
 
 void handleReset()
@@ -229,7 +314,11 @@ void setup()
       ;
   }
 
-  calibrateGyro();
+  if (!loadCalibration())
+  {
+    Serial.println("Calibração não encontrada. Calibrando pela primeira vez...");
+    calibrateGyro();
+  }
 
   // ===== WiFiManager =====
   WiFiManager wm;
@@ -250,6 +339,7 @@ void setup()
   server.on("/reset", handleReset);
   server.on("/status", handleStatus);
   server.on("/setIP", handleSetIP);
+  server.on("/calibrate", handleCalibrate);
   server.begin();
 
   lastTime = millis();
