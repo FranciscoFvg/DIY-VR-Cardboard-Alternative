@@ -10,6 +10,12 @@ DFRobot_BMI160 bmi160;       // inicializando o sensor
 WiFiUDP udp;                 // inicializando o protocolo UDP
 ESP8266WebServer server(80); // inicializando o servidor web
 
+// ====== BOTÃO FÍSICO ======
+const int BUTTON_PIN = D5;  // GPIO14 - Pino do botão
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
 // ====== OPENTRACK (PC) ======
 IPAddress pcIP(192, 168, 0, 14); // IP da máquina com OPENTRACK
 unsigned int pcPort = 4242;      // porta usada pelo OPENTRACK
@@ -47,6 +53,19 @@ struct CalibrationData
 };
 const uint32_t CALIB_MAGIC = 0x43414C31; // "CAL1"
 
+struct AxisConfig
+{
+  uint32_t magic;
+  bool enableYaw;
+  bool enablePitch;
+  bool enableRoll;
+};
+const uint32_t AXIS_MAGIC = 0x41584953; // "AXIS"
+
+// Variáveis de configuração de eixos
+bool enableYaw = true;
+bool enablePitch = true;
+bool enableRoll = true;
 
 void loadUdpConfig()
 {
@@ -110,6 +129,41 @@ void saveCalibration()
   Serial.println("Calibração salva na EEPROM!");
 }
 
+void loadAxisConfig()
+{
+  AxisConfig cfg;
+  EEPROM.get(sizeof(UdpConfig) + sizeof(CalibrationData), cfg);
+  
+  if (cfg.magic == AXIS_MAGIC)
+  {
+    enableYaw = cfg.enableYaw;
+    enablePitch = cfg.enablePitch;
+    enableRoll = cfg.enableRoll;
+    
+    Serial.println("Configuração de eixos carregada:");
+    Serial.print("Yaw: ");
+    Serial.println(enableYaw ? "ON" : "OFF");
+    Serial.print("Pitch: ");
+    Serial.println(enablePitch ? "ON" : "OFF");
+    Serial.print("Roll: ");
+    Serial.println(enableRoll ? "ON" : "OFF");
+  }
+}
+
+void saveAxisConfig()
+{
+  AxisConfig cfg;
+  cfg.magic = AXIS_MAGIC;
+  cfg.enableYaw = enableYaw;
+  cfg.enablePitch = enablePitch;
+  cfg.enableRoll = enableRoll;
+  
+  EEPROM.put(sizeof(UdpConfig) + sizeof(CalibrationData), cfg);
+  EEPROM.commit();
+  
+  Serial.println("Configuração de eixos salva na EEPROM!");
+}
+
 // ====== CALIBRAÇÃO ======
 void calibrateGyro()
 {
@@ -159,13 +213,20 @@ void handleRoot()
                 ".label{font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;}"
                 ".value{font-size:20px;font-weight:700;color:#e2e8f0;}"
                 ".line{height:1px;background:#1f2937;margin:16px 0;}"
-                "input{width:100%;padding:10px;border-radius:10px;border:1px solid #334155;"
+                "input[type=text]{width:100%;padding:10px;border-radius:10px;border:1px solid #334155;"
                 "background:#0b1220;color:#e2e8f0;box-sizing:border-box;}"
+                ".checkbox-group{display:flex;gap:16px;flex-wrap:wrap;}"
+                ".checkbox-item{display:flex;align-items:center;gap:8px;}"
+                ".checkbox-item input[type=checkbox]{width:20px;height:20px;cursor:pointer;}"
+                ".checkbox-item label{cursor:pointer;color:#e2e8f0;font-size:14px;}"
                 "button{padding:10px 14px;border:0;border-radius:10px;background:#22c55e;color:#0f172a;"
-                "font-weight:700;cursor:pointer;}"
+                "font-weight:700;cursor:pointer;width:100%;}"
                 "button.secondary{background:#38bdf8;}"
                 "button.warning{background:#f59e0b;}"
                 "form{margin:0;display:flex;flex-direction:column;gap:10px;}"
+                ".status-indicator{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:8px;}"
+                ".status-on{background:#22c55e;}"
+                ".status-off{background:#ef4444;}"
                 "@media (max-width:520px){.grid{grid-template-columns:1fr;}}"
                 "</style>"
                 "<script>"
@@ -183,35 +244,64 @@ void handleRoot()
                 "<h2>Head Tracker - ESP8266</h2>"
                 "<div class='grid'>"
                 "<div class='item'><div class='label'>Pitch</div><div class='value' id='pitch'>" +
-                String(pitch, 2) + "</div></div>"
-                                   "<div class='item'><div class='label'>Roll</div><div class='value' id='roll'>" +
-                String(roll, 2) + "</div></div>"
-                                  "<div class='item'><div class='label'>Yaw</div><div class='value' id='yaw'>" +
-                String(yaw, 2) + "</div></div>"
-                                 "<div class='item'><div class='label'>IP ESP</div><div class='value'>" +
+                String(pitch, 2) + "<span class='status-indicator " + String(enablePitch ? "status-on" : "status-off") + "'></span></div></div>"
+                "<div class='item'><div class='label'>Roll</div><div class='value' id='roll'>" +
+                String(roll, 2) + "<span class='status-indicator " + String(enableRoll ? "status-on" : "status-off") + "'></span></div></div>"
+                "<div class='item'><div class='label'>Yaw</div><div class='value' id='yaw'>" +
+                String(yaw, 2) + "<span class='status-indicator " + String(enableYaw ? "status-on" : "status-off") + "'></span></div></div>"
+                "<div class='item'><div class='label'>IP ESP</div><div class='value'>" +
                 WiFi.localIP().toString() + "</div></div>"
-                                            "<div class='item' style='grid-column:1/-1;'><div class='label'>Destino UDP</div>"
-                                            "<div class='value' id='dest'>" +
+                "<div class='item' style='grid-column:1/-1;'><div class='label'>Destino UDP</div>"
+                "<div class='value' id='dest'>" +
                 pcIP.toString() + ":" + String(pcPort) + "</div></div>"
-                                                         "</div>"
-                                                         "<div class='line'></div>"
-                                                         "<form action='/reset'>"
-                                                         "<button class='secondary' type='submit'>Zerar Yaw</button>"
-                                                         "</form>"
-                                                         "<div class='line'></div>"
-                                                         "<form action='/calibrate' onsubmit='return confirm(\"Coloque o sensor em superfície plana. Continuar?\");'>"
-                                                         "<button class='warning' type='submit'>Recalibrar Giroscópio</button>"
-                                                         "</form>"
-                                                         "<div class='line'></div>"
-                                                         "<form action='/setIP' method='get'>"
-                                                         "<input name='ip' placeholder='IP destino (ex: 192.168.0.14)'>"
-                                                         "<input name='port' placeholder='Porta (ex: 4242)'>"
-                                                         "<button type='submit'>Salvar destino</button>"
-                                                         "</form>"
-                                                         "</div>"
-                                                         "</body></html>";
+                "</div>"
+                "<div class='line'></div>"
+                "<form action='/axis' method='get'>"
+                "<div class='label' style='margin-bottom:10px;'>Eixos Habilitados</div>"
+                "<div class='checkbox-group'>"
+                "<div class='checkbox-item'>"
+                "<input type='checkbox' id='yaw' name='yaw' value='1'" + String(enableYaw ? " checked" : "") + ">"
+                "<label for='yaw'>Yaw</label>"
+                "</div>"
+                "<div class='checkbox-item'>"
+                "<input type='checkbox' id='pitch' name='pitch' value='1'" + String(enablePitch ? " checked" : "") + ">"
+                "<label for='pitch'>Pitch</label>"
+                "</div>"
+                "<div class='checkbox-item'>"
+                "<input type='checkbox' id='roll' name='roll' value='1'" + String(enableRoll ? " checked" : "") + ">"
+                "<label for='roll'>Roll</label>"
+                "</div>"
+                "</div>"
+                "<button type='submit' style='margin-top:10px;'>Salvar Eixos</button>"
+                "</form>"
+                "<div class='line'></div>"
+                "<form action='/reset'>"
+                "<button class='secondary' type='submit'>Zerar Yaw</button>"
+                "</form>"
+                "<div class='line'></div>"
+                "<form action='/calibrate' onsubmit='return confirm(\"Coloque o sensor em superfície plana. Continuar?\");'>"
+                "<button class='warning' type='submit'>Recalibrar Giroscópio</button>"
+                "</form>"
+                "<div class='line'></div>"
+                "<form action='/setIP' method='get'>"
+                "<input type='text' name='ip' placeholder='IP destino (ex: 192.168.0.14)'>"
+                "<input type='text' name='port' placeholder='Porta (ex: 4242)'>"
+                "<button type='submit'>Salvar destino</button>"
+                "</form>"
+                "</div>"
+                "</body></html>";
 
   server.send(200, "text/html", html);
+}
+
+void handleReset()
+{
+  yaw = 0;
+  pitch = 0;
+  roll = 0;
+  Serial.println("Orientação resetada!");
+  server.sendHeader("Location", "/");
+  server.send(303);
 }
 
 void handleCalibrate()
@@ -243,13 +333,6 @@ void handleCalibrate()
   
   delay(500);
   calibrateGyro();
-}
-
-void handleReset()
-{
-  yaw = 0;
-  server.sendHeader("Location", "/");
-  server.send(303);
 }
 
 void handleStatus()
@@ -295,14 +378,30 @@ void handleSetIP()
   server.send(303);
 }
 
+void handleAxisConfig()
+{
+  enableYaw = server.hasArg("yaw");
+  enablePitch = server.hasArg("pitch");
+  enableRoll = server.hasArg("roll");
+  
+  saveAxisConfig();
+  
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
 // ====== SETUP ======
 void setup()
 {
   Serial.begin(115200);
   delay(2000);
 
-  EEPROM.begin(64); // Inicializa a EEPROM para armazenamento de dados
-  loadUdpConfig();  // Carrega configuração UDP salva (se existir)
+  // Configurar botão com pull-up interno
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  EEPROM.begin(256); // Aumentado para comportar todas as configurações
+  loadUdpConfig();   // Carrega configuração UDP salva (se existir)
+  loadAxisConfig();  // Carrega configuração de eixos
 
   // I2C ESP8266
   Wire.begin(D2, D1);
@@ -314,6 +413,7 @@ void setup()
       ;
   }
 
+  // Tenta carregar calibração salva, se não existir, calibra
   if (!loadCalibration())
   {
     Serial.println("Calibração não encontrada. Calibrando pela primeira vez...");
@@ -340,6 +440,7 @@ void setup()
   server.on("/status", handleStatus);
   server.on("/setIP", handleSetIP);
   server.on("/calibrate", handleCalibrate);
+  server.on("/axis", handleAxisConfig);
   server.begin();
 
   lastTime = millis();
@@ -348,6 +449,25 @@ void setup()
 void loop()
 {
   server.handleClient();
+
+  // ===== Leitura do botão com debounce =====
+  int reading = digitalRead(BUTTON_PIN);
+  
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading == LOW) {  // Botão pressionado (pull-up = LOW quando pressionado)
+      yaw = 0;
+      pitch = 0;
+      roll = 0;
+      Serial.println("Botão pressionado - Orientação resetada!");
+      delay(200);  // Pequeno delay para evitar múltiplos resets
+    }
+  }
+  
+  lastButtonState = reading;
 
   unsigned long now = millis();
   dt = (now - lastTime) / 1000.0;
@@ -362,9 +482,9 @@ void loop()
     float gy = (data[1] - gyroY_offset) / 16.4;
     float gz = (data[2] - gyroZ_offset) * (PI / 180.0) / 16.4;
 
-    pitch += gx * dt;
-    roll += gy * dt;
-    yaw += gz * dt * 180.0 / PI;
+    if (enablePitch) pitch += gx * dt;
+    if (enableRoll) roll += gy * dt;
+    if (enableYaw) yaw += gz * dt * 180.0 / PI;
 
     float ax = data[3] / 16384.0;
     float ay = data[4] / 16384.0;
@@ -375,8 +495,8 @@ void loop()
     rollAcc = atan2(-ax, sqrt(ay * ay + az * az)) * 180.0 / PI;
 
     // ===== Filtro complementar =====
-    pitch = alpha * pitch + (1.0 - alpha) * pitchAcc;
-    roll = alpha * roll + (1.0 - alpha) * rollAcc;
+    if (enablePitch) pitch = alpha * pitch + (1.0 - alpha) * pitchAcc;
+    if (enableRoll) roll = alpha * roll + (1.0 - alpha) * rollAcc;
 
     if (abs(roll) > 48)
     {
@@ -385,12 +505,12 @@ void loop()
 
     // ===== Envio UDP =====
     double pkt[6];
-    pkt[0] = 0.0;   // X
-    pkt[1] = 0.0;   // Y
-    pkt[2] = 0.0;   // Z
-    pkt[3] = yaw;   // Yaw
-    pkt[4] = pitch; // Pitch
-    pkt[5] = roll;  // Roll
+    pkt[0] = 0.0;                         // X
+    pkt[1] = 0.0;                         // Y
+    pkt[2] = 0.0;                         // Z
+    pkt[3] = enableYaw ? yaw : 0.0;       // Yaw
+    pkt[4] = enablePitch ? pitch : 0.0;   // Pitch
+    pkt[5] = enableRoll ? roll : 0.0;     // Roll
 
     udp.beginPacket(pcIP, pcPort);
     udp.write((uint8_t *)pkt, sizeof(pkt)); // 6 doubles = 48 bytes
