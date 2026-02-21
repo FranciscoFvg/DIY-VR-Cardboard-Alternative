@@ -12,7 +12,8 @@ ESP8266WebServer server(80); // inicializando o servidor web
 
 // ====== BOTÃO FÍSICO ======
 const int BUTTON_PIN = D5;  // GPIO14 - Pino do botão
-bool lastButtonState = HIGH;
+bool buttonLastReading = HIGH;
+bool buttonStableState = HIGH;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
 
@@ -34,6 +35,12 @@ float gyroZ_offset = 0;
 
 unsigned long lastTime;
 float dt;
+
+// ====== PERFORMANCE ======
+const uint32_t SENSOR_INTERVAL_US = 4000;      // ~250 Hz para IMU + UDP
+const uint32_t WEB_HANDLE_INTERVAL_MS = 25;    // ~40 Hz para servidor web
+unsigned long lastSensorMicros = 0;
+unsigned long lastWebHandle = 0;
 
 // ====== EEPROM ======
 struct UdpConfig
@@ -232,22 +239,22 @@ void handleRoot()
                 "<script>"
                 "setInterval(function(){"
                 "fetch('/status').then(r=>r.json()).then(d=>{"
-                "document.getElementById('pitch').textContent=d.pitch;"
-                "document.getElementById('roll').textContent=d.roll;"
-                "document.getElementById('yaw').textContent=d.yaw;"
+                "document.getElementById('pitchVal').textContent=d.pitch;"
+                "document.getElementById('rollVal').textContent=d.roll;"
+                "document.getElementById('yawVal').textContent=d.yaw;"
                 "document.getElementById('dest').textContent=d.dest;"
                 "});"
-                "}, 50);"
+                "}, 200);"
                 "</script>"
                 "</head><body>"
                 "<div class='card'>"
                 "<h2>Head Tracker - ESP8266</h2>"
                 "<div class='grid'>"
-                "<div class='item'><div class='label'>Pitch</div><div class='value' id='pitch'>" +
+                "<div class='item'><div class='label'>Pitch</div><div class='value' id='pitchVal'>" +
                 String(pitch, 2) + "<span class='status-indicator " + String(enablePitch ? "status-on" : "status-off") + "'></span></div></div>"
-                "<div class='item'><div class='label'>Roll</div><div class='value' id='roll'>" +
+                "<div class='item'><div class='label'>Roll</div><div class='value' id='rollVal'>" +
                 String(roll, 2) + "<span class='status-indicator " + String(enableRoll ? "status-on" : "status-off") + "'></span></div></div>"
-                "<div class='item'><div class='label'>Yaw</div><div class='value' id='yaw'>" +
+                "<div class='item'><div class='label'>Yaw</div><div class='value' id='yawVal'>" +
                 String(yaw, 2) + "<span class='status-indicator " + String(enableYaw ? "status-on" : "status-off") + "'></span></div></div>"
                 "<div class='item'><div class='label'>IP ESP</div><div class='value'>" +
                 WiFi.localIP().toString() + "</div></div>"
@@ -337,12 +344,11 @@ void handleCalibrate()
 
 void handleStatus()
 {
-  String json = "{";
-  json += "\"pitch\":" + String(pitch, 2) + ",";
-  json += "\"roll\":" + String(roll, 2) + ",";
-  json += "\"yaw\":" + String(yaw, 2) + ",";
-  json += "\"dest\":\"" + pcIP.toString() + ":" + String(pcPort) + "\"";
-  json += "}";
+  char json[128];
+  snprintf(json, sizeof(json),
+           "{\"pitch\":%.2f,\"roll\":%.2f,\"yaw\":%.2f,\"dest\":\"%u.%u.%u.%u:%u\"}",
+           pitch, roll, yaw,
+           pcIP[0], pcIP[1], pcIP[2], pcIP[3], pcPort);
   server.send(200, "application/json", json);
 }
 
@@ -444,34 +450,52 @@ void setup()
   server.begin();
 
   lastTime = millis();
+  lastSensorMicros = micros();
+  lastWebHandle = millis();
 }
 
 void loop()
 {
-  server.handleClient();
+  unsigned long nowMs = millis();
+  if ((uint32_t)(nowMs - lastWebHandle) >= WEB_HANDLE_INTERVAL_MS)
+  {
+    server.handleClient();
+    lastWebHandle = nowMs;
+  }
 
   // ===== Leitura do botão com debounce =====
   int reading = digitalRead(BUTTON_PIN);
   
-  if (reading != lastButtonState) {
+  if (reading != buttonLastReading)
+  {
     lastDebounceTime = millis();
   }
   
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading == LOW) {  // Botão pressionado (pull-up = LOW quando pressionado)
+  if ((millis() - lastDebounceTime) > debounceDelay && reading != buttonStableState)
+  {
+    buttonStableState = reading;
+
+    if (buttonStableState == LOW)
+    {
       yaw = 0;
       pitch = 0;
       roll = 0;
       Serial.println("Botão pressionado - Orientação resetada!");
-      delay(200);  // Pequeno delay para evitar múltiplos resets
     }
   }
   
-  lastButtonState = reading;
+  buttonLastReading = reading;
 
-  unsigned long now = millis();
-  dt = (now - lastTime) / 1000.0;
-  lastTime = now;
+  unsigned long nowUs = micros();
+  uint32_t elapsedUs = (uint32_t)(nowUs - lastSensorMicros);
+  if (elapsedUs < SENSOR_INTERVAL_US)
+  {
+    return;
+  }
+  dt = elapsedUs / 1000000.0f;
+  lastSensorMicros = nowUs;
+
+  lastTime = nowMs;
 
   int16_t data[6];
   if (bmi160.getAccelGyroData(data) == BMI160_OK)
@@ -516,6 +540,4 @@ void loop()
     udp.write((uint8_t *)pkt, sizeof(pkt)); // 6 doubles = 48 bytes
     udp.endPacket();
   }
-
-  delay(2);
 }
