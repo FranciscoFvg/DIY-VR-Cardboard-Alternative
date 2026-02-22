@@ -100,6 +100,79 @@ def slerp_quaternion(q0, q1, t):
     return normalize_quaternion(result)
 
 
+def estimate_hand_size(world_landmarks):
+    """Estima o tamanho da mão baseado na distância entre landmarks"""
+    wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
+    middle_mcp = np.array([world_landmarks[9].x, world_landmarks[9].y, world_landmarks[9].z])
+    middle_tip = np.array([world_landmarks[12].x, world_landmarks[12].y, world_landmarks[12].z])
+    
+    # Distância do pulso ao meio da mão
+    hand_length = np.linalg.norm(middle_tip - wrist)
+    return hand_length
+
+
+def compute_3d_position_from_image(image_landmarks, world_landmarks, image_width, image_height, 
+                                    position_scale=1.0, depth_reference=0.5,
+                                    sensitivity_x=1.0, sensitivity_y=1.0, sensitivity_z=1.0,
+                                    invert_x=False, invert_y=False, invert_z=False):
+    """
+    Calcula posição 3D no espaço da câmera baseada em:
+    - Posição 2D na imagem (image_landmarks)
+    - Tamanho da mão para estimar profundidade (world_landmarks)
+    
+    Retorna posição em metros no sistema de coordenadas VR:
+    - X: direita(+) / esquerda(-)
+    - Y: cima(+) / baixo(-)
+    - Z: frente(+) / trás(-)
+    
+    Args:
+        position_scale: Fator de escala para movimentação (padrão 1.0)
+        depth_reference: Distância de referência para cálculo de profundidade (padrão 0.5m)
+        sensitivity_x/y/z: Sensibilidade de cada eixo (0.0-2.0)
+        invert_x/y/z: Inverter direção de cada eixo
+    """
+    # Posição 2D do pulso na imagem (normalizada 0-1)
+    wrist_2d = image_landmarks[0]
+    x_norm = wrist_2d.x
+    y_norm = wrist_2d.y
+    
+    # Converter para coordenadas centralizadas (-0.5 a 0.5)
+    # X: direita é +, esquerda é -
+    x_centered = x_norm - 0.5
+    # Y: cima é +, baixo é -
+    y_centered = y_norm - 0.5
+    
+    # Estimar profundidade baseada no tamanho da mão
+    # Mãos maiores na imagem = mais próximas (Z positivo = frente)
+    hand_size = estimate_hand_size(world_landmarks)
+    
+    # Tamanho típico de uma mão adulta: ~0.19 metros
+    # Quanto maior o hand_size, maior Z (mais perto/frente)
+    reference_hand_size = 0.19
+    z_3d = (hand_size / max(reference_hand_size, 0.01)) * depth_reference * 0.5
+    
+    # Clamp profundidade para valores razoáveis (-0.5 a 0.5 metros)
+    z_3d = np.clip(z_3d, -0.5, 0.5)
+    
+    # Campo de visão (FOV) típico de webcam: ~60-70 graus
+    # Usar perspectiva para converter posição 2D em 3D
+    fov_scale = 1.0  # Fator base de escala
+    
+    x_3d = x_centered * fov_scale * position_scale * sensitivity_x
+    y_3d = y_centered * fov_scale * position_scale * sensitivity_y
+    z_3d = z_3d * sensitivity_z
+    
+    # Aplicar inversão de eixos
+    if invert_x:
+        x_3d = -x_3d
+    if invert_y:
+        y_3d = -y_3d
+    if invert_z:
+        z_3d = -z_3d
+    
+    return np.array([x_3d, y_3d, z_3d])
+
+
 def hand_pose_from_world_landmarks(world_landmarks):
     wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
     index_mcp = np.array([world_landmarks[5].x, world_landmarks[5].y, world_landmarks[5].z])
@@ -178,7 +251,7 @@ class ConfigTabsPanel:
         try:
             self.root = tk.Tk()
             self.root.title("Hand Tracker - Config")
-            self.root.geometry("420x320")
+            self.root.geometry("500x500")
             self.root.resizable(False, False)
 
             tabs = ttk.Notebook(self.root)
@@ -193,6 +266,12 @@ class ConfigTabsPanel:
                 upper_arm_length = self.config.upper_arm_length
                 forearm_length = self.config.forearm_length
                 hand_movement_scale = self.config.hand_movement_scale
+                sensitivity_x = self.config.sensitivity_x
+                sensitivity_y = self.config.sensitivity_y
+                sensitivity_z = self.config.sensitivity_z
+                invert_x = self.config.invert_x
+                invert_y = self.config.invert_y
+                invert_z = self.config.invert_z
 
             self.press_var = tk.StringVar(value=f"{press_threshold:.3f}")
             self.release_var = tk.StringVar(value=f"{release_threshold:.3f}")
@@ -202,14 +281,25 @@ class ConfigTabsPanel:
             self.upper_arm_var = tk.StringVar(value=f"{upper_arm_length:.2f}")
             self.forearm_var = tk.StringVar(value=f"{forearm_length:.2f}")
             self.movement_scale_var = tk.StringVar(value=f"{hand_movement_scale:.2f}")
+            
+            self.sensitivity_x_var = tk.StringVar(value=f"{sensitivity_x:.2f}")
+            self.sensitivity_y_var = tk.StringVar(value=f"{sensitivity_y:.2f}")
+            self.sensitivity_z_var = tk.StringVar(value=f"{sensitivity_z:.2f}")
+            self.invert_x_var = tk.BooleanVar(value=invert_x)
+            self.invert_y_var = tk.BooleanVar(value=invert_y)
+            self.invert_z_var = tk.BooleanVar(value=invert_z)
 
             pinch_tab = ttk.Frame(tabs)
             smoothing_tab = ttk.Frame(tabs)
             offsets_tab = ttk.Frame(tabs)
+            movement_tab = ttk.Frame(tabs)
+            advanced_tab = ttk.Frame(tabs)
 
             tabs.add(pinch_tab, text="Pinch")
             tabs.add(smoothing_tab, text="Smoothing")
             tabs.add(offsets_tab, text="Offsets")
+            tabs.add(movement_tab, text="Movement")
+            tabs.add(advanced_tab, text="Advanced")
 
             self._add_number_input(pinch_tab, "Press Threshold", self.press_var, 0)
             self._add_number_input(pinch_tab, "Release Threshold", self.release_var, 1)
@@ -221,6 +311,25 @@ class ConfigTabsPanel:
             self._add_number_input(offsets_tab, "Upper Arm Length (-0.5..0.5)", self.upper_arm_var, 1)
             self._add_number_input(offsets_tab, "Forearm Length (-0.5..0.5)", self.forearm_var, 2)
             self._add_number_input(offsets_tab, "Hand Movement Scale (0..2)", self.movement_scale_var, 3)
+            
+            # Aba Movement - Sensibilidade e Inversão de eixos
+            self._add_number_input(movement_tab, "Sensitivity X (0..2)", self.sensitivity_x_var, 0)
+            self._add_number_input(movement_tab, "Sensitivity Y (0..2)", self.sensitivity_y_var, 1)
+            self._add_number_input(movement_tab, "Sensitivity Z (0..2)", self.sensitivity_z_var, 2)
+            
+            ttk.Checkbutton(movement_tab, text="Invert X", variable=self.invert_x_var).grid(row=3, column=0, sticky="w", padx=10, pady=8)
+            ttk.Checkbutton(movement_tab, text="Invert Y", variable=self.invert_y_var).grid(row=4, column=0, sticky="w", padx=10, pady=8)
+            ttk.Checkbutton(movement_tab, text="Invert Z", variable=self.invert_z_var).grid(row=5, column=0, sticky="w", padx=10, pady=8)
+            
+            # Aba Advanced - Botão de reset
+            reset_frame = ttk.LabelFrame(advanced_tab, text="Reset", padding=10)
+            reset_frame.pack(fill="x", padx=10, pady=10)
+            
+            ttk.Button(reset_frame, text="Reset Posição e Rotação", command=self.reset_pose).pack(fill="x", pady=5)
+            
+            reset_info = ttk.Label(advanced_tab, text="Clique para resetar a posição\ne rotação dos controles virtuais", 
+                                  justify="left", foreground="gray")
+            reset_info.pack(padx=10, pady=5)
 
             actions = ttk.Frame(self.root)
             actions.pack(fill="x", padx=8, pady=(0, 8))
@@ -235,6 +344,15 @@ class ConfigTabsPanel:
         except Exception as exc:
             print(f"Falha ao iniciar painel de configuração: {exc}")
             self.enabled = False
+    
+    def reset_pose(self):
+        """Reseta a posição e rotação dos controles virtuais"""
+        with self.config.lock:
+            self.config.neutral_hand_pos_x = 0.0
+            self.config.neutral_hand_pos_y = 0.0
+            self.config.neutral_hand_pos_z = 0.0
+        self.config.save_to_file()
+        self.status_var.set("Posição e rotação resetadas!")
 
     def _add_number_input(self, parent, label_text, variable, row):
         ttk.Label(parent, text=label_text).grid(row=row, column=0, sticky="w", padx=10, pady=8)
@@ -268,6 +386,19 @@ class ConfigTabsPanel:
             self.config.hand_movement_scale = clamp(
                 parse_float_or_default(self.movement_scale_var.get(), self.config.hand_movement_scale), 0.0, 2.0
             )
+            
+            self.config.sensitivity_x = clamp(
+                parse_float_or_default(self.sensitivity_x_var.get(), self.config.sensitivity_x), 0.0, 2.0
+            )
+            self.config.sensitivity_y = clamp(
+                parse_float_or_default(self.sensitivity_y_var.get(), self.config.sensitivity_y), 0.0, 2.0
+            )
+            self.config.sensitivity_z = clamp(
+                parse_float_or_default(self.sensitivity_z_var.get(), self.config.sensitivity_z), 0.0, 2.0
+            )
+            self.config.invert_x = self.invert_x_var.get()
+            self.config.invert_y = self.invert_y_var.get()
+            self.config.invert_z = self.invert_z_var.get()
 
             self.press_var.set(f"{self.config.pinch_press_threshold:.3f}")
             self.release_var.set(f"{self.config.pinch_release_threshold:.3f}")
@@ -277,6 +408,10 @@ class ConfigTabsPanel:
             self.upper_arm_var.set(f"{self.config.upper_arm_length:.2f}")
             self.forearm_var.set(f"{self.config.forearm_length:.2f}")
             self.movement_scale_var.set(f"{self.config.hand_movement_scale:.2f}")
+            
+            self.sensitivity_x_var.set(f"{self.config.sensitivity_x:.2f}")
+            self.sensitivity_y_var.set(f"{self.config.sensitivity_y:.2f}")
+            self.sensitivity_z_var.set(f"{self.config.sensitivity_z:.2f}")
 
         self.config.save_to_file()
         self.status_var.set("Config aplicada e salva")
@@ -317,6 +452,17 @@ class ConfigState:
         # Suavização para reduzir tremor
         self.position_smoothing = 0.70
         self.rotation_smoothing = 0.70
+        # Rastreamento de posição da webcam
+        self.position_tracking_scale = 1.0  # Escala do movimento posicional
+        self.depth_reference_distance = 0.5  # Distância de referência para cálculo de profundidade
+        # Sensibilidade de movimento por eixo
+        self.sensitivity_x = 1.0
+        self.sensitivity_y = 1.0
+        self.sensitivity_z = 1.0
+        # Inversão de eixos
+        self.invert_x = False
+        self.invert_y = False
+        self.invert_z = False
 
     def save_to_file(self):
         with self.lock:
@@ -332,6 +478,14 @@ class ConfigState:
                 "hand_movement_scale": self.hand_movement_scale,
                 "position_smoothing": self.position_smoothing,
                 "rotation_smoothing": self.rotation_smoothing,
+                "position_tracking_scale": self.position_tracking_scale,
+                "depth_reference_distance": self.depth_reference_distance,
+                "sensitivity_x": self.sensitivity_x,
+                "sensitivity_y": self.sensitivity_y,
+                "sensitivity_z": self.sensitivity_z,
+                "invert_x": self.invert_x,
+                "invert_y": self.invert_y,
+                "invert_z": self.invert_z,
             }
             try:
                 with open(CONFIG_FILE, "w") as f:
@@ -356,6 +510,14 @@ class ConfigState:
                         self.hand_movement_scale = config_data.get("hand_movement_scale", self.hand_movement_scale)
                         self.position_smoothing = config_data.get("position_smoothing", self.position_smoothing)
                         self.rotation_smoothing = config_data.get("rotation_smoothing", self.rotation_smoothing)
+                        self.position_tracking_scale = config_data.get("position_tracking_scale", self.position_tracking_scale)
+                        self.depth_reference_distance = config_data.get("depth_reference_distance", self.depth_reference_distance)
+                        self.sensitivity_x = config_data.get("sensitivity_x", self.sensitivity_x)
+                        self.sensitivity_y = config_data.get("sensitivity_y", self.sensitivity_y)
+                        self.sensitivity_z = config_data.get("sensitivity_z", self.sensitivity_z)
+                        self.invert_x = config_data.get("invert_x", self.invert_x)
+                        self.invert_y = config_data.get("invert_y", self.invert_y)
+                        self.invert_z = config_data.get("invert_z", self.invert_z)
                     print(f"Config carregada de {CONFIG_FILE}")
             except Exception as e:
                 print(f"Erro ao carregar config: {e}")
@@ -446,6 +608,8 @@ def main():
         left_conf = None
         right_conf = None
 
+        height, width = frame.shape[:2]
+
         with config.lock:
             press_th = config.pinch_press_threshold
             release_th = config.pinch_release_threshold
@@ -455,28 +619,56 @@ def main():
             movement_scale = config.hand_movement_scale
             pos_smoothing = config.position_smoothing
             rot_smoothing = config.rotation_smoothing
+            pos_tracking_scale = config.position_tracking_scale
+            depth_ref = config.depth_reference_distance
+            sens_x = config.sensitivity_x
+            sens_y = config.sensitivity_y
+            sens_z = config.sensitivity_z
+            inv_x = config.invert_x
+            inv_y = config.invert_y
+            inv_z = config.invert_z
 
-        if results.hand_world_landmarks and results.handedness:
-            for hand_landmarks, handedness in zip(results.hand_world_landmarks,
-                                                  results.handedness):
+        if results.hand_world_landmarks and results.handedness and results.hand_landmarks:
+            for image_landmarks, world_landmarks, handedness in zip(
+                results.hand_landmarks,
+                results.hand_world_landmarks,
+                results.handedness
+            ):
                 label = handedness[0].category_name.lower()
                 score = handedness[0].score
                 hand_tag = "L" if label == "left" else "R"
 
-                pos, quat = hand_pose_from_world_landmarks(hand_landmarks)
+                # Calcular posição 3D baseada na imagem da webcam
+                pos_3d = compute_3d_position_from_image(
+                    image_landmarks, 
+                    world_landmarks, 
+                    width, 
+                    height,
+                    position_scale=pos_tracking_scale,
+                    depth_reference=depth_ref,
+                    sensitivity_x=sens_x,
+                    sensitivity_y=sens_y,
+                    sensitivity_z=sens_z,
+                    invert_x=inv_x,
+                    invert_y=inv_y,
+                    invert_z=inv_z
+                )
                 
-                # Armazenar posição atual da mão (wrist)
-                hand_current_pos[hand_tag] = np.array(pos)
+                # Calcular rotação dos world landmarks
+                _, quat = hand_pose_from_world_landmarks(world_landmarks)
+                
+                # Armazenar posição atual da mão (wrist) - usar posição 3D da webcam
+                hand_current_pos[hand_tag] = pos_3d.copy()
                 
                 # Inicializar posição neutra se não existir
                 if hand_neutral_pos[hand_tag] is None:
-                    hand_neutral_pos[hand_tag] = np.array(pos)
+                    hand_neutral_pos[hand_tag] = pos_3d.copy()
                 
                 # Calcular movimento dinâmico (diferença em relação à posição neutra)
                 hand_movement = (hand_current_pos[hand_tag] - hand_neutral_pos[hand_tag]) * movement_scale
                 
                 # Aplicar offsets de membro
-                pos = apply_limb_offsets(pos, hand_tag, shoulder_w, upper_arm, forearm, hand_movement)
+                pos = apply_limb_offsets(pos_3d, hand_tag, shoulder_w, upper_arm, forearm, hand_movement)
 
                 raw_pos = np.array(pos, dtype=float)
                 raw_quat = np.array(quat, dtype=float)
@@ -499,7 +691,7 @@ def main():
                 quat = tuple(filtered_rot[hand_tag])
                 
                 pressed, distance = compute_pinch_trigger(
-                    hand_landmarks,
+                    world_landmarks,
                     trigger_state[hand_tag],
                     press_th,
                     release_th,

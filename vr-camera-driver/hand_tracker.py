@@ -62,6 +62,79 @@ def rotation_matrix_to_quaternion(r):
     return qw, qx, qy, qz
 
 
+def estimate_hand_size(world_landmarks):
+    """Estima o tamanho da mão baseado na distância entre landmarks"""
+    wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
+    middle_mcp = np.array([world_landmarks[9].x, world_landmarks[9].y, world_landmarks[9].z])
+    middle_tip = np.array([world_landmarks[12].x, world_landmarks[12].y, world_landmarks[12].z])
+    
+    # Distância do pulso ao meio da mão
+    hand_length = np.linalg.norm(middle_tip - wrist)
+    return hand_length
+
+
+def compute_3d_position_from_image(image_landmarks, world_landmarks, image_width, image_height, 
+                                    position_scale=1.0, depth_reference=0.5,
+                                    sensitivity_x=1.0, sensitivity_y=1.0, sensitivity_z=1.0,
+                                    invert_x=False, invert_y=False, invert_z=False):
+    """
+    Calcula posição 3D no espaço da câmera baseada em:
+    - Posição 2D na imagem (image_landmarks)
+    - Tamanho da mão para estimar profundidade (world_landmarks)
+    
+    Retorna posição em metros no sistema de coordenadas VR:
+    - X: direita(+) / esquerda(-)
+    - Y: cima(+) / baixo(-)
+    - Z: frente(+) / trás(-)
+    
+    Args:
+        position_scale: Fator de escala para movimentação (padrão 1.0)
+        depth_reference: Distância de referência para cálculo de profundidade (padrão 0.5m)
+        sensitivity_x/y/z: Sensibilidade de cada eixo (0.0-2.0)
+        invert_x/y/z: Inverter direção de cada eixo
+    """
+    # Posição 2D do pulso na imagem (normalizada 0-1)
+    wrist_2d = image_landmarks[0]
+    x_norm = wrist_2d.x
+    y_norm = wrist_2d.y
+    
+    # Converter para coordenadas centralizadas (-0.5 a 0.5)
+    # X: direita é +, esquerda é -
+    x_centered = x_norm - 0.5
+    # Y: cima é +, baixo é -
+    y_centered = y_norm - 0.5
+    
+    # Estimar profundidade baseada no tamanho da mão
+    # Mãos maiores na imagem = mais próximas (Z positivo = frente)
+    hand_size = estimate_hand_size(world_landmarks)
+    
+    # Tamanho típico de uma mão adulta: ~0.19 metros
+    # Quanto maior o hand_size, maior Z (mais perto/frente)
+    reference_hand_size = 0.19
+    z_3d = (hand_size / max(reference_hand_size, 0.01)) * depth_reference * 0.5
+    
+    # Clamp profundidade para valores razoáveis (-0.5 a 0.5 metros)
+    z_3d = np.clip(z_3d, -0.5, 0.5)
+    
+    # Campo de visão (FOV) típico de webcam: ~60-70 graus
+    # Usar perspectiva para converter posição 2D em 3D
+    fov_scale = 1.0  # Fator base de escala
+    
+    x_3d = x_centered * fov_scale * position_scale * sensitivity_x
+    y_3d = y_centered * fov_scale * position_scale * sensitivity_y
+    z_3d = z_3d * sensitivity_z
+    
+    # Aplicar inversão de eixos
+    if invert_x:
+        x_3d = -x_3d
+    if invert_y:
+        y_3d = -y_3d
+    if invert_z:
+        z_3d = -z_3d
+    
+    return np.array([x_3d, y_3d, z_3d])
+
+
 def hand_pose_from_world_landmarks(world_landmarks):
     # landmarks: list of 21 points with x,y,z in meters
     # Use wrist (0), index_mcp (5), pinky_mcp (17)
@@ -155,22 +228,37 @@ def main():
         left_conf = None
         right_conf = None
 
-        if results.hand_world_landmarks and results.handedness:
-            for hand_landmarks, handedness in zip(results.hand_world_landmarks,
-                                                  results.handedness):
+        height, width = frame.shape[:2]
+
+        if results.hand_world_landmarks and results.handedness and results.hand_landmarks:
+            for hand_landmarks, world_landmarks, handedness in zip(
+                results.hand_landmarks,
+                results.hand_world_landmarks,
+                results.handedness
+            ):
                 label = handedness[0].category_name.lower()
                 score = handedness[0].score
                 hand_tag = "L" if label == "left" else "R"
 
-                pos, quat = hand_pose_from_world_landmarks(hand_landmarks)
+                # Calcular posição 3D baseada na imagem da webcam
+                pos_3d = compute_3d_position_from_image(
+                    hand_landmarks, 
+                    world_landmarks, 
+                    width, 
+                    height
+                )
+                
+                # Calcular rotação dos world landmarks
+                _, quat = hand_pose_from_world_landmarks(world_landmarks)
+                
                 trigger_state[hand_tag] = compute_pinch_trigger(
-                    hand_landmarks,
+                    world_landmarks,
                     trigger_state[hand_tag],
                     args.pinch_press_threshold,
                     args.pinch_release_threshold,
                 )
                 trigger_value = 1.0 if trigger_state[hand_tag] else 0.0
-                send_pose(sock, addr, hand_tag, pos, quat, True, timestamp, trigger_value)
+                send_pose(sock, addr, hand_tag, pos_3d, quat, True, timestamp, trigger_value)
 
                 if hand_tag == "L":
                     left_sent = True

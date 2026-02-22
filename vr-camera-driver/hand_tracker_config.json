@@ -9,5 +9,13 @@
   "neutral_hand_pos_z": 0.0,
   "hand_movement_scale": 1.0,
   "position_smoothing": 0.82,
-  "rotation_smoothing": 0.8
+  "rotation_smoothing": 0.8,
+  "position_tracking_scale": 1.0,
+  "depth_reference_distance": 0.5,
+  "sensitivity_x": 0.3,
+  "sensitivity_y": 0.3,
+  "sensitivity_z": 1.0,
+  "invert_x": true,
+  "invert_y": false,
+  "invert_z": false
 }
