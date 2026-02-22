@@ -18,7 +18,10 @@
   "invert_x": true,
   "invert_y": false,
   "invert_z": false,
-  "camera_source": "ipwebcam",
+  "camera_source": "webcam",
   "ipwebcam_url": "http://10.219.227.241:8080",
-  "follow_head_translation": true
+  "follow_head_translation": true,
+  "max_prediction_frames": 8,
+  "prediction_damping": 0.82,
+  "velocity_smoothing": 0.75
 }
