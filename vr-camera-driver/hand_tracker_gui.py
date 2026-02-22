@@ -5,14 +5,28 @@ import time
 import threading
 import json
 import os
+import logging
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk
+from advanced_tracking import (
+    OneEuroFilter, KinematicConstrainer, HandednessDetector,
+    PredictiveROI, OrientationRobustPreprocessor, BoneQuantizer
+)
 
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 import numpy as np
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 CONFIG_FILE = "hand_tracker_config.json"
 
@@ -166,9 +180,20 @@ def slerp_quaternion(q0, q1, t):
 
 def estimate_hand_size(world_landmarks):
     """Estima o tamanho da mão baseado na distância entre landmarks"""
-    wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
-    middle_mcp = np.array([world_landmarks[9].x, world_landmarks[9].y, world_landmarks[9].z])
-    middle_tip = np.array([world_landmarks[12].x, world_landmarks[12].y, world_landmarks[12].z])
+    # Suporte para tanto objetos do MediaPipe quanto numpy arrays
+    if isinstance(world_landmarks, np.ndarray):
+        wrist = world_landmarks[0][:3].astype(float)
+        middle_mcp = world_landmarks[9][:3].astype(float)
+        middle_tip = world_landmarks[12][:3].astype(float)
+    else:
+        try:
+            wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
+            middle_mcp = np.array([world_landmarks[9].x, world_landmarks[9].y, world_landmarks[9].z])
+            middle_tip = np.array([world_landmarks[12].x, world_landmarks[12].y, world_landmarks[12].z])
+        except (AttributeError, TypeError):
+            wrist = np.array(world_landmarks[0][:3]).astype(float)
+            middle_mcp = np.array(world_landmarks[9][:3]).astype(float)
+            middle_tip = np.array(world_landmarks[12][:3]).astype(float)
     
     # Distância do pulso ao meio da mão
     hand_length = np.linalg.norm(middle_tip - wrist)
@@ -238,9 +263,22 @@ def compute_3d_position_from_image(image_landmarks, world_landmarks, image_width
 
 
 def hand_pose_from_world_landmarks(world_landmarks):
-    wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
-    index_mcp = np.array([world_landmarks[5].x, world_landmarks[5].y, world_landmarks[5].z])
-    pinky_mcp = np.array([world_landmarks[17].x, world_landmarks[17].y, world_landmarks[17].z])
+    # Suporte para tanto objetos do MediaPipe quanto numpy arrays
+    if isinstance(world_landmarks, np.ndarray):
+        wrist = world_landmarks[0][:3].astype(float)
+        index_mcp = world_landmarks[5][:3].astype(float)
+        pinky_mcp = world_landmarks[17][:3].astype(float)
+    else:
+        # Tenta acessar como lista de objetos (.x, .y, .z)
+        try:
+            wrist = np.array([world_landmarks[0].x, world_landmarks[0].y, world_landmarks[0].z])
+            index_mcp = np.array([world_landmarks[5].x, world_landmarks[5].y, world_landmarks[5].z])
+            pinky_mcp = np.array([world_landmarks[17].x, world_landmarks[17].y, world_landmarks[17].z])
+        except (AttributeError, TypeError):
+            # Se falhar, tenta como lista de listas/arrays
+            wrist = np.array(world_landmarks[0][:3]).astype(float)
+            index_mcp = np.array(world_landmarks[5][:3]).astype(float)
+            pinky_mcp = np.array(world_landmarks[17][:3]).astype(float)
 
     x_axis = normalize(index_mcp - wrist)
     y_axis = normalize(pinky_mcp - wrist)
@@ -267,8 +305,14 @@ def send_pose(sock, addr, hand_tag, position, quat, valid, timestamp, trigger_va
 
 
 def compute_pinch_trigger(world_landmarks, was_pressed, press_threshold, release_threshold):
-    thumb_tip = np.array([world_landmarks[4].x, world_landmarks[4].y, world_landmarks[4].z])
-    index_tip = np.array([world_landmarks[8].x, world_landmarks[8].y, world_landmarks[8].z])
+    # Suporte tanto para objetos com .x/.y/.z quanto para arrays numpy
+    if isinstance(world_landmarks, np.ndarray):
+        thumb_tip = world_landmarks[4][:3].astype(float)
+        index_tip = world_landmarks[8][:3].astype(float)
+    else:
+        thumb_tip = np.array([world_landmarks[4].x, world_landmarks[4].y, world_landmarks[4].z])
+        index_tip = np.array([world_landmarks[8].x, world_landmarks[8].y, world_landmarks[8].z])
+    
     distance = np.linalg.norm(thumb_tip - index_tip)
 
     if was_pressed:
@@ -321,8 +365,8 @@ class ConfigTabsPanel:
         try:
             self.root = tk.Tk()
             self.root.title("Hand Tracker - Config")
-            self.root.geometry("500x500")
-            self.root.resizable(False, False)
+            self.root.geometry("500x700")
+            self.root.resizable(True, True)
 
             tabs = ttk.Notebook(self.root)
             tabs.pack(fill="both", expand=True, padx=8, pady=8)
@@ -348,6 +392,9 @@ class ConfigTabsPanel:
                 max_prediction_frames = self.config.max_prediction_frames
                 prediction_damping = self.config.prediction_damping
                 velocity_smoothing = self.config.velocity_smoothing
+                euro_mincutoff = self.config.euro_mincutoff
+                euro_beta = self.config.euro_beta
+                euro_dcutoff = self.config.euro_dcutoff
 
             self.press_var = tk.StringVar(value=f"{press_threshold:.3f}")
             self.release_var = tk.StringVar(value=f"{release_threshold:.3f}")
@@ -372,6 +419,26 @@ class ConfigTabsPanel:
             self.max_prediction_frames_var = tk.StringVar(value=f"{max_prediction_frames}")
             self.prediction_damping_var = tk.StringVar(value=f"{prediction_damping:.2f}")
             self.velocity_smoothing_var = tk.StringVar(value=f"{velocity_smoothing:.2f}")
+            
+            self.euro_mincutoff_var = tk.StringVar(value=f"{euro_mincutoff:.2f}")
+            self.euro_beta_var = tk.StringVar(value=f"{euro_beta:.2f}")
+            self.euro_dcutoff_var = tk.StringVar(value=f"{euro_dcutoff:.2f}")
+            
+            # Status variables para os checkboxes (não persistem em config)
+            self.status_pinch_l = tk.BooleanVar(value=False)
+            self.status_pinch_r = tk.BooleanVar(value=False)
+            self.status_fist_l = tk.BooleanVar(value=False)
+            self.status_fist_r = tk.BooleanVar(value=False)
+            self.status_open_l = tk.BooleanVar(value=False)
+            self.status_open_r = tk.BooleanVar(value=False)
+            self.status_pointing_l = tk.BooleanVar(value=False)
+            self.status_pointing_r = tk.BooleanVar(value=False)
+            self.status_peace_l = tk.BooleanVar(value=False)
+            self.status_peace_r = tk.BooleanVar(value=False)
+            self.status_thumbs_l = tk.BooleanVar(value=False)
+            self.status_thumbs_r = tk.BooleanVar(value=False)
+            self.status_hand_l = tk.BooleanVar(value=False)
+            self.status_hand_r = tk.BooleanVar(value=False)
 
             pinch_tab = ttk.Frame(tabs)
             smoothing_tab = ttk.Frame(tabs)
@@ -379,6 +446,7 @@ class ConfigTabsPanel:
             movement_tab = ttk.Frame(tabs)
             camera_tab = ttk.Frame(tabs)
             advanced_tab = ttk.Frame(tabs)
+            status_tab = ttk.Frame(tabs)
 
             tabs.add(pinch_tab, text="Pinch")
             tabs.add(smoothing_tab, text="Smoothing")
@@ -386,6 +454,7 @@ class ConfigTabsPanel:
             tabs.add(movement_tab, text="Movement")
             tabs.add(camera_tab, text="Camera")
             tabs.add(advanced_tab, text="Advanced")
+            tabs.add(status_tab, text="Status")
 
             self._add_number_input(pinch_tab, "Press Threshold", self.press_var, 0)
             self._add_number_input(pinch_tab, "Release Threshold", self.release_var, 1)
@@ -440,6 +509,18 @@ class ConfigTabsPanel:
                      text="Predição usa velocidade estimada para\nmanter tracking quando mão é obstruída", 
                      justify="left", foreground="gray").grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=10)
             
+            # Aba Advanced - One Euro Filter (Monado+)
+            euro_frame = ttk.LabelFrame(advanced_tab, text="One Euro Filter (Advanced Smoothing)", padding=10)
+            euro_frame.pack(fill="x", padx=10, pady=10)
+            
+            self._add_number_input(euro_frame, "Euro Min Cutoff (0.1-2)", self.euro_mincutoff_var, 0)
+            self._add_number_input(euro_frame, "Euro Beta (0-0.5)", self.euro_beta_var, 1)
+            self._add_number_input(euro_frame, "Euro D Cutoff (0.1-2)", self.euro_dcutoff_var, 2)
+            
+            ttk.Label(euro_frame, 
+                     text="One Euro Filter adapta suavização conforme\nvelocidade - melhor que simples filtro", 
+                     justify="left", foreground="gray").grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=10)
+            
             # Aba Advanced - Botão de reset
             reset_frame = ttk.LabelFrame(advanced_tab, text="Reset", padding=10)
             reset_frame.pack(fill="x", padx=10, pady=10)
@@ -449,14 +530,59 @@ class ConfigTabsPanel:
             reset_info = ttk.Label(advanced_tab, text="Clique para resetar a posição\ne rotação dos controles virtuais", 
                                   justify="left", foreground="gray")
             reset_info.pack(padx=10, pady=5)
+            
+            # Aba Status - Checkboxes de status em tempo real
+            status_canvas = tk.Canvas(status_tab, highlightthickness=0)
+            status_scrollbar = ttk.Scrollbar(status_tab, orient="vertical", command=status_canvas.yview)
+            status_scrollable = ttk.Frame(status_canvas)
+            
+            status_scrollable.bind(
+                "<Configure>",
+                lambda e: status_canvas.configure(scrollregion=status_canvas.bbox("all"))
+            )
+            
+            status_canvas.create_window((0, 0), window=status_scrollable, anchor="nw")
+            status_canvas.configure(yscrollcommand=status_scrollbar.set)
+            
+            # Título
+            ttk.Label(status_scrollable, text="🖐 Estado dos Gestos em Tempo Real", font=("Arial", 11, "bold")).pack(padx=10, pady=10)
+            
+            # Mão Esquerda
+            ttk.Label(status_scrollable, text="Mão Esquerda (L)", font=("Arial", 10, "bold")).pack(anchor="w", padx=15, pady=(10, 5))
+            left_frame = ttk.Frame(status_scrollable)
+            left_frame.pack(anchor="w", padx=25, pady=5)
+            
+            ttk.Checkbutton(left_frame, text="👋 Mão Detectada", variable=self.status_hand_l, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(left_frame, text="✌️  Pinça Ativa", variable=self.status_pinch_l, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(left_frame, text="✊ Punho Fechado", variable=self.status_fist_l, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(left_frame, text="✋ Mão Aberta", variable=self.status_open_l, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(left_frame, text="☝️  Apontando", variable=self.status_pointing_l, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(left_frame, text="✌️  Paz", variable=self.status_peace_l, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(left_frame, text="👍 Polegar para Cima", variable=self.status_thumbs_l, state="disabled").pack(anchor="w", pady=3)
+            
+            # Mão Direita
+            ttk.Label(status_scrollable, text="Mão Direita (R)", font=("Arial", 10, "bold")).pack(anchor="w", padx=15, pady=(15, 5))
+            right_frame = ttk.Frame(status_scrollable)
+            right_frame.pack(anchor="w", padx=25, pady=5)
+            
+            ttk.Checkbutton(right_frame, text="👋 Mão Detectada", variable=self.status_hand_r, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(right_frame, text="✌️  Pinça Ativa", variable=self.status_pinch_r, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(right_frame, text="✊ Punho Fechado", variable=self.status_fist_r, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(right_frame, text="✋ Mão Aberta", variable=self.status_open_r, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(right_frame, text="☝️  Apontando", variable=self.status_pointing_r, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(right_frame, text="✌️  Paz", variable=self.status_peace_r, state="disabled").pack(anchor="w", pady=3)
+            ttk.Checkbutton(right_frame, text="👍 Polegar para Cima", variable=self.status_thumbs_r, state="disabled").pack(anchor="w", pady=3)
+            
+            status_canvas.pack(side="left", fill="both", expand=True)
+            status_scrollbar.pack(side="right", fill="y")
 
             actions = ttk.Frame(self.root)
-            actions.pack(fill="x", padx=8, pady=(0, 8))
+            actions.pack(fill="x", padx=8, pady=(8, 8))
 
-            ttk.Button(actions, text="Aplicar", command=self.apply_values).pack(side="left")
-            ttk.Button(actions, text="Calibrar Mãos", command=self.on_calibrate_request).pack(side="left", padx=(8, 0))
+            ttk.Button(actions, text="💾 Aplicar", command=self.apply_values).pack(side="left")
+            ttk.Button(actions, text="📐 Calibrar Mãos", command=self.on_calibrate_request).pack(side="left", padx=(8, 0))
 
-            self.status_var = tk.StringVar(value="Edite os números e clique em Aplicar")
+            self.status_var = tk.StringVar(value="Clique em 'Aplicar' para salvar as alterações")
             ttk.Label(actions, textvariable=self.status_var).pack(side="left", padx=(12, 0))
 
             self.enabled = True
@@ -531,6 +657,16 @@ class ConfigTabsPanel:
             self.config.velocity_smoothing = clamp(
                 parse_float_or_default(self.velocity_smoothing_var.get(), self.config.velocity_smoothing), 0.0, 1.0
             )
+            
+            self.config.euro_mincutoff = clamp(
+                parse_float_or_default(self.euro_mincutoff_var.get(), self.config.euro_mincutoff), 0.1, 2.0
+            )
+            self.config.euro_beta = clamp(
+                parse_float_or_default(self.euro_beta_var.get(), self.config.euro_beta), 0.0, 0.5
+            )
+            self.config.euro_dcutoff = clamp(
+                parse_float_or_default(self.euro_dcutoff_var.get(), self.config.euro_dcutoff), 0.1, 2.0
+            )
 
             self.press_var.set(f"{self.config.pinch_press_threshold:.3f}")
             self.release_var.set(f"{self.config.pinch_release_threshold:.3f}")
@@ -548,6 +684,10 @@ class ConfigTabsPanel:
             self.max_prediction_frames_var.set(f"{self.config.max_prediction_frames}")
             self.prediction_damping_var.set(f"{self.config.prediction_damping:.2f}")
             self.velocity_smoothing_var.set(f"{self.config.velocity_smoothing:.2f}")
+            
+            self.euro_mincutoff_var.set(f"{self.config.euro_mincutoff:.2f}")
+            self.euro_beta_var.set(f"{self.config.euro_beta:.2f}")
+            self.euro_dcutoff_var.set(f"{self.config.euro_dcutoff:.2f}")
 
         self.config.save_to_file()
         self.status_var.set("Config aplicada e salva")
@@ -607,6 +747,10 @@ class ConfigState:
         self.max_prediction_frames = 8
         self.prediction_damping = 0.82
         self.velocity_smoothing = 0.75
+        # Parâmetros One Euro Filter (Monado+)
+        self.euro_mincutoff = 0.8  # Frequência de corte mínima
+        self.euro_beta = 0.1       # Coeficiente de velocidade (quanto mais rápido, mais filtro relaxa)
+        self.euro_dcutoff = 0.8    # Frequência de corte derivativa
 
     def save_to_file(self):
         with self.lock:
@@ -636,6 +780,9 @@ class ConfigState:
                 "max_prediction_frames": self.max_prediction_frames,
                 "prediction_damping": self.prediction_damping,
                 "velocity_smoothing": self.velocity_smoothing,
+                "euro_mincutoff": self.euro_mincutoff,
+                "euro_beta": self.euro_beta,
+                "euro_dcutoff": self.euro_dcutoff,
             }
             try:
                 with open(CONFIG_FILE, "w") as f:
@@ -674,6 +821,9 @@ class ConfigState:
                         self.max_prediction_frames = config_data.get("max_prediction_frames", self.max_prediction_frames)
                         self.prediction_damping = config_data.get("prediction_damping", self.prediction_damping)
                         self.velocity_smoothing = config_data.get("velocity_smoothing", self.velocity_smoothing)
+                        self.euro_mincutoff = config_data.get("euro_mincutoff", self.euro_mincutoff)
+                        self.euro_beta = config_data.get("euro_beta", self.euro_beta)
+                        self.euro_dcutoff = config_data.get("euro_dcutoff", self.euro_dcutoff)
                     print(f"Config carregada de {CONFIG_FILE}")
             except Exception as e:
                 print(f"Erro ao carregar config: {e}")
@@ -688,6 +838,13 @@ def main():
     parser.add_argument("--pinch-press-threshold", type=float, default=0.03)
     parser.add_argument("--pinch-release-threshold", type=float, default=0.04)
     args = parser.parse_args()
+    
+    # Resolver caminho do modelo relativo ao script
+    model_path = args.model
+    if not os.path.isabs(model_path):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(script_dir, model_path)
+    args.model = model_path
 
     # Testar conectividade com a câmera antes de tudo
     print(f"\n=== Testando câmeras disponíveis ===")
@@ -761,6 +918,25 @@ def main():
     filtered_rot = {"L": None, "R": None}
     filtered_vel = {"L": np.zeros(3, dtype=float), "R": np.zeros(3, dtype=float)}
     missing_frames = {"L": 0, "R": 0}
+    
+    # Rastreamento de estado anterior para logging (evita spam)
+    prev_pose_state = {"L": None, "R": None}
+    prev_pinch_state = {"L": False, "R": False}
+    prev_handedness = {"L": None, "R": None}
+    
+    # Advanced tracking components
+    euro_filters_pos = {
+        "L": OneEuroFilter(mincutoff=0.8, beta=0.1, dcutoff=0.8),
+        "R": OneEuroFilter(mincutoff=0.8, beta=0.1, dcutoff=0.8),
+    }
+    euro_filters_rot = {
+        "L": OneEuroFilter(mincutoff=1.0, beta=0.05, dcutoff=0.5),
+        "R": OneEuroFilter(mincutoff=1.0, beta=0.05, dcutoff=0.5),
+    }
+    kinematic_constrainer = KinematicConstrainer()
+    handedness_detector = HandednessDetector()
+    predictive_roi = {"L": PredictiveROI(), "R": PredictiveROI()}
+    bone_quantizer = BoneQuantizer()
 
     calibrate_requested = False
 
@@ -1003,12 +1179,40 @@ def main():
                 # Calcular rotação dos world landmarks
                 _, quat = hand_pose_from_world_landmarks(world_landmarks)
                 
+                # NOVO: Aplicar restrições cinemáticas para evitar ossos de tamanho infinito
+                # world_landmarks pode ser um objeto com .landmark ou uma lista diretamente
+                landmarks_list = world_landmarks.landmark if hasattr(world_landmarks, 'landmark') else world_landmarks
+                constrained_landmarks = kinematic_constrainer.enforce_constraints(
+                    landmarks_list,
+                    max_displacement=0.05
+                )
+                
+                # NOVO: Detectar chirality (L/R) baseado em configuração 3D
+                detected_hand = handedness_detector.detect_handedness(
+                    constrained_landmarks
+                )
+                if detected_hand != hand_tag:
+                    print(f"⚠ Detecção L/R: esperado {hand_tag}, detectado {detected_hand}")
+                    logger.warning(f"Discrepância L/R na mão {hand_tag}: {detected_hand}")
+                
+                # NOVO: Determinar pose da mão (aberta, fechada, ponto, etc)
+                pose_name, pose_confidence = bone_quantizer.get_hand_pose(
+                    constrained_landmarks
+                )
+                
+                # Log quando pose muda
+                if pose_name != prev_pose_state[hand_tag]:
+                    logger.info(f"🤚 Mão {hand_tag}: {pose_name.upper()} (confiança: {pose_confidence:.1%})")
+                    prev_pose_state[hand_tag] = pose_name
+                
                 # Armazenar posição atual da mão (wrist) - usar posição 3D da webcam
                 hand_current_pos[hand_tag] = pos_3d.copy()
                 
                 # Inicializar posição neutra se não existir
                 if hand_neutral_pos[hand_tag] is None:
                     hand_neutral_pos[hand_tag] = pos_3d.copy()
+                    # Inicializar kinematic constrainer com a primeira detecção
+                    kinematic_constrainer.initialize_from_landmarks(constrained_landmarks)
                 
                 # Calcular movimento dinâmico (diferença em relação à posição neutra)
                 hand_movement = (hand_current_pos[hand_tag] - hand_neutral_pos[hand_tag]) * movement_scale
@@ -1022,24 +1226,17 @@ def main():
                 if filtered_pos[hand_tag] is None:
                     filtered_pos[hand_tag] = raw_pos.copy()
                     filtered_rot[hand_tag] = normalize_quaternion(raw_quat)
+                    # Inicializar One Euro Filters
+                    euro_filters_pos[hand_tag].filter(raw_pos, timestamp)
+                    euro_filters_rot[hand_tag].filter(raw_quat[:3], timestamp)  # Usar só a parte de rotação
+                    logger.info(f"👋 MANO DETECTADA - Mão {hand_tag} (confiança: {score:.1%})")
                 else:
-                    adaptive_pos_smoothing = clamp(
-                        pos_smoothing + (0.85 - score) * 0.25,
-                        0.0,
-                        0.97,
-                    )
-                    adaptive_rot_smoothing = clamp(
-                        rot_smoothing + (0.85 - score) * 0.20,
-                        0.0,
-                        0.97,
-                    )
-
+                    # NOVO: Usar One Euro Filter em vez de simples suavização exponencial
+                    # One Euro Filter adapta dinamicamente o damping baseado na velocidade
+                    filtered_pos[hand_tag] = euro_filters_pos[hand_tag].filter(raw_pos, timestamp)
+                    
+                    # Estimar velocidade para predição
                     prev_filtered = filtered_pos[hand_tag].copy()
-                    filtered_pos[hand_tag] = (
-                        adaptive_pos_smoothing * filtered_pos[hand_tag]
-                        + (1.0 - adaptive_pos_smoothing) * raw_pos
-                    )
-
                     if dt > 1e-5:
                         measured_vel = (filtered_pos[hand_tag] - prev_filtered) / dt
                         with config.lock:
@@ -1049,10 +1246,11 @@ def main():
                             + (1.0 - vel_smooth) * measured_vel
                         )
 
-                    filtered_rot[hand_tag] = slerp_quaternion(
-                        filtered_rot[hand_tag],
-                        raw_quat,
-                        1.0 - adaptive_rot_smoothing,
+                    # One Euro Filter para rotação (aplicado no espaço euclidiano para simplificar)
+                    quat_for_filter = np.array([raw_quat[0], raw_quat[1], raw_quat[2]])
+                    filtered_quat_xyz = euro_filters_rot[hand_tag].filter(quat_for_filter, timestamp)
+                    filtered_rot[hand_tag] = normalize_quaternion(
+                        np.concatenate([filtered_quat_xyz, [raw_quat[3]]])
                     )
 
                 missing_frames[hand_tag] = 0
@@ -1060,15 +1258,46 @@ def main():
                 pos = tuple(filtered_pos[hand_tag])
                 quat = tuple(filtered_rot[hand_tag])
                 
+                # Detectar pinch mesmo em poses especiais (fist, etc)
+                compressed_landmarks = constrained_landmarks.copy()
                 pressed, distance = compute_pinch_trigger(
-                    world_landmarks,
+                    compressed_landmarks,
                     trigger_state[hand_tag],
                     press_th,
                     release_th,
                 )
+                
+                # Log quando estado do pinch muda
+                if pressed != prev_pinch_state[hand_tag]:
+                    if pressed:
+                        logger.info(f"✌️  PINÇA ATIVADA - Mão {hand_tag} (distância: {distance:.3f}m)")
+                    else:
+                        logger.info(f"✌️  PINÇA DESATIVADA - Mão {hand_tag}")
+                    prev_pinch_state[hand_tag] = pressed
+                
                 trigger_state[hand_tag] = pressed
                 trigger_distance[hand_tag] = distance
                 trigger_value = 1.0 if pressed else 0.0
+                
+                # Atualizar status dos checkboxes na GUI
+                if config_panel.enabled:
+                    if hand_tag == "L":
+                        config_panel.status_hand_l.set(bool(True))
+                        config_panel.status_pinch_l.set(bool(pressed))
+                        config_panel.status_fist_l.set(bool(pose_name == "fist"))
+                        config_panel.status_open_l.set(bool(pose_name == "open"))
+                        config_panel.status_pointing_l.set(bool(pose_name == "pointing"))
+                        config_panel.status_peace_l.set(bool(pose_name == "peace"))
+                        config_panel.status_thumbs_l.set(bool(pose_name == "thumbs_up"))
+                    else:  # R
+                        config_panel.status_hand_r.set(bool(True))
+                        config_panel.status_pinch_r.set(bool(pressed))
+                        config_panel.status_fist_r.set(bool(pose_name == "fist"))
+                        config_panel.status_open_r.set(bool(pose_name == "open"))
+                        config_panel.status_pointing_r.set(bool(pose_name == "pointing"))
+                        config_panel.status_peace_r.set(bool(pose_name == "peace"))
+                        config_panel.status_thumbs_r.set(bool(pose_name == "thumbs_up"))
+                
                 send_pose(sock, addr, hand_tag, pos, quat, True, timestamp, trigger_value,
                           camera_on_head=(current_camera_source == "ipwebcam"),
                           follow_head_translation=follow_head_translation)
@@ -1101,6 +1330,23 @@ def main():
         if not left_sent:
             trigger_state["L"] = False
             trigger_distance["L"] = 0.0
+            
+            # Limpar status dos checkboxes
+            if config_panel.enabled:
+                config_panel.status_hand_l.set(False)
+                config_panel.status_pinch_l.set(False)
+                config_panel.status_fist_l.set(False)
+                config_panel.status_open_l.set(False)
+                config_panel.status_pointing_l.set(False)
+                config_panel.status_peace_l.set(False)
+                config_panel.status_thumbs_l.set(False)
+            
+            # Log quando mão esquerda desaparece
+            if prev_pose_state["L"] is not None and missing_frames["L"] == 0:
+                logger.warning(f"👋 MANO PERDIDA - Mão L perdida")
+                prev_pose_state["L"] = None
+                prev_pinch_state["L"] = False
+            
             with config.lock:
                 max_pred_frames = config.max_prediction_frames
                 pred_damp = config.prediction_damping
@@ -1119,6 +1365,23 @@ def main():
         if not right_sent:
             trigger_state["R"] = False
             trigger_distance["R"] = 0.0
+            
+            # Limpar status dos checkboxes
+            if config_panel.enabled:
+                config_panel.status_hand_r.set(False)
+                config_panel.status_pinch_r.set(False)
+                config_panel.status_fist_r.set(False)
+                config_panel.status_open_r.set(False)
+                config_panel.status_pointing_r.set(False)
+                config_panel.status_peace_r.set(False)
+                config_panel.status_thumbs_r.set(False)
+            
+            # Log quando mão direita desaparece
+            if prev_pose_state["R"] is not None and missing_frames["R"] == 0:
+                logger.warning(f"👋 MANO PERDIDA - Mão R perdida")
+                prev_pose_state["R"] = None
+                prev_pinch_state["R"] = False
+            
             with config.lock:
                 max_pred_frames = config.max_prediction_frames
                 pred_damp = config.prediction_damping

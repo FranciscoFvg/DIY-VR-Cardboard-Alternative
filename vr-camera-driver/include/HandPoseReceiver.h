@@ -5,9 +5,14 @@
 #include <mutex>
 #include <thread>
 
-class HandPoseReceiver {
+class HandPoseReceiver
+{
 public:
-    enum class Hand { Left, Right };
+    enum class Hand
+    {
+        Left,
+        Right
+    };
 
     explicit HandPoseReceiver(int port = 7000);
     ~HandPoseReceiver();
@@ -22,7 +27,7 @@ public:
 
 private:
     void receiveLoop();
-    void updatePose(Hand hand, const Pose6DoF& pose, float triggerValue);
+    void updatePose(Hand hand, const Pose6DoF &pose, float triggerValue);
 
     int port_;
     std::atomic<bool> running_;
