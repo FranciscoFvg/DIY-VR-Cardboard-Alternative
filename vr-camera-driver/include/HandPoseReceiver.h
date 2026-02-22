@@ -17,6 +17,8 @@ public:
 
     Pose6DoF getLatestPose(Hand hand);
     float getLatestTrigger(Hand hand);
+    bool isCameraHeadMounted();
+    bool isHeadTranslationFollowEnabled();
 
 private:
     void receiveLoop();
@@ -30,4 +32,6 @@ private:
     Pose6DoF rightPose_;
     float leftTrigger_;
     float rightTrigger_;
+    bool cameraHeadMounted_;
+    bool followHeadTranslation_;
 };

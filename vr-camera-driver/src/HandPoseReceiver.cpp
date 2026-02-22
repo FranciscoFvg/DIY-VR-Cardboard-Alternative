@@ -22,6 +22,8 @@ HandPoseReceiver::HandPoseReceiver(int port)
     rightPose_.valid = false;
     leftTrigger_ = 0.0f;
     rightTrigger_ = 0.0f;
+    cameraHeadMounted_ = false;
+    followHeadTranslation_ = false;
 }
 
 HandPoseReceiver::~HandPoseReceiver() {
@@ -57,6 +59,16 @@ Pose6DoF HandPoseReceiver::getLatestPose(HandPoseReceiver::Hand hand) {
 float HandPoseReceiver::getLatestTrigger(HandPoseReceiver::Hand hand) {
     std::lock_guard<std::mutex> lock(poseMutex_);
     return (hand == Hand::Left) ? leftTrigger_ : rightTrigger_;
+}
+
+bool HandPoseReceiver::isCameraHeadMounted() {
+    std::lock_guard<std::mutex> lock(poseMutex_);
+    return cameraHeadMounted_;
+}
+
+bool HandPoseReceiver::isHeadTranslationFollowEnabled() {
+    std::lock_guard<std::mutex> lock(poseMutex_);
+    return followHeadTranslation_;
 }
 
 void HandPoseReceiver::updatePose(HandPoseReceiver::Hand hand, const Pose6DoF& pose, float triggerValue) {
@@ -126,6 +138,8 @@ void HandPoseReceiver::receiveLoop() {
         int valid = 0;
         double timestamp = 0.0;
         double triggerValue = 0.0;
+        int cameraOnHead = 0;
+        int followHeadTranslation = 0;
 
         iss >> handChar >> px >> py >> pz >> qw >> qx >> qy >> qz >> valid >> timestamp;
         if (iss.fail()) {
@@ -134,6 +148,14 @@ void HandPoseReceiver::receiveLoop() {
 
         if (!(iss >> triggerValue)) {
             triggerValue = 0.0;
+        }
+
+        if (!(iss >> cameraOnHead)) {
+            cameraOnHead = 0;
+        }
+
+        if (!(iss >> followHeadTranslation)) {
+            followHeadTranslation = 0;
         }
 
         Pose6DoF pose;
@@ -145,6 +167,12 @@ void HandPoseReceiver::receiveLoop() {
         pose.matrix = Eigen::Matrix4d::Identity();
         pose.matrix.block<3, 3>(0, 0) = pose.rotation.toRotationMatrix();
         pose.matrix.block<3, 1>(0, 3) = pose.position;
+
+        {
+            std::lock_guard<std::mutex> lock(poseMutex_);
+            cameraHeadMounted_ = (cameraOnHead != 0);
+            followHeadTranslation_ = (followHeadTranslation != 0);
+        }
 
         if (handChar == 'L' || handChar == 'l') {
             updatePose(Hand::Left, pose, (float)triggerValue);

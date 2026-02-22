@@ -27,6 +27,57 @@ HAND_CONNECTIONS = [
 ]
 
 
+class LatestFrameCapture:
+    def __init__(self, source):
+        self.source = source
+        self.cap = cv2.VideoCapture(source)
+        self.lock = threading.Lock()
+        self.latest_frame = None
+        self.latest_ok = False
+        self.running = False
+        self.thread = None
+
+        if self.cap.isOpened():
+            try:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+
+    def start(self):
+        if not self.cap.isOpened() or self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self.thread.start()
+
+    def _reader_loop(self):
+        while self.running:
+            ok, frame = self.cap.read()
+            with self.lock:
+                self.latest_ok = ok
+                if ok:
+                    self.latest_frame = frame
+            if not ok:
+                time.sleep(0.01)
+
+    def read(self):
+        with self.lock:
+            if not self.latest_ok or self.latest_frame is None:
+                return False, None
+            return True, self.latest_frame.copy()
+
+    def isOpened(self):
+        return self.cap is not None and self.cap.isOpened()
+
+    def release(self):
+        self.running = False
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=0.3)
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+
 def normalize(v):
     norm = np.linalg.norm(v)
     if norm < 1e-6:
@@ -189,10 +240,16 @@ def hand_pose_from_world_landmarks(world_landmarks):
     return wrist, (qw, qx, qy, qz)
 
 
-def send_pose(sock, addr, hand_tag, position, quat, valid, timestamp, trigger_value):
+def send_pose(sock, addr, hand_tag, position, quat, valid, timestamp, trigger_value,
+              camera_on_head=False, follow_head_translation=False):
     px, py, pz = position
     qw, qx, qy, qz = quat
-    msg = f"{hand_tag} {px:.6f} {py:.6f} {pz:.6f} {qw:.6f} {qx:.6f} {qy:.6f} {qz:.6f} {1 if valid else 0} {timestamp:.6f} {trigger_value:.3f}"
+    msg = (
+        f"{hand_tag} {px:.6f} {py:.6f} {pz:.6f} "
+        f"{qw:.6f} {qx:.6f} {qy:.6f} {qz:.6f} "
+        f"{1 if valid else 0} {timestamp:.6f} {trigger_value:.3f} "
+        f"{1 if camera_on_head else 0} {1 if follow_head_translation else 0}"
+    )
     sock.sendto(msg.encode("utf-8"), addr)
 
 
@@ -272,6 +329,9 @@ class ConfigTabsPanel:
                 invert_x = self.config.invert_x
                 invert_y = self.config.invert_y
                 invert_z = self.config.invert_z
+                camera_source = self.config.camera_source
+                ipwebcam_url = self.config.ipwebcam_url
+                follow_head_translation = self.config.follow_head_translation
 
             self.press_var = tk.StringVar(value=f"{press_threshold:.3f}")
             self.release_var = tk.StringVar(value=f"{release_threshold:.3f}")
@@ -288,17 +348,23 @@ class ConfigTabsPanel:
             self.invert_x_var = tk.BooleanVar(value=invert_x)
             self.invert_y_var = tk.BooleanVar(value=invert_y)
             self.invert_z_var = tk.BooleanVar(value=invert_z)
+            
+            self.camera_source_var = tk.StringVar(value=camera_source)
+            self.ipwebcam_url_var = tk.StringVar(value=ipwebcam_url)
+            self.follow_head_translation_var = tk.BooleanVar(value=follow_head_translation)
 
             pinch_tab = ttk.Frame(tabs)
             smoothing_tab = ttk.Frame(tabs)
             offsets_tab = ttk.Frame(tabs)
             movement_tab = ttk.Frame(tabs)
+            camera_tab = ttk.Frame(tabs)
             advanced_tab = ttk.Frame(tabs)
 
             tabs.add(pinch_tab, text="Pinch")
             tabs.add(smoothing_tab, text="Smoothing")
             tabs.add(offsets_tab, text="Offsets")
             tabs.add(movement_tab, text="Movement")
+            tabs.add(camera_tab, text="Camera")
             tabs.add(advanced_tab, text="Advanced")
 
             self._add_number_input(pinch_tab, "Press Threshold", self.press_var, 0)
@@ -320,6 +386,27 @@ class ConfigTabsPanel:
             ttk.Checkbutton(movement_tab, text="Invert X", variable=self.invert_x_var).grid(row=3, column=0, sticky="w", padx=10, pady=8)
             ttk.Checkbutton(movement_tab, text="Invert Y", variable=self.invert_y_var).grid(row=4, column=0, sticky="w", padx=10, pady=8)
             ttk.Checkbutton(movement_tab, text="Invert Z", variable=self.invert_z_var).grid(row=5, column=0, sticky="w", padx=10, pady=8)
+            
+            # Aba Camera - Fonte de câmera
+            ttk.Label(camera_tab, text="Camera Source").grid(row=0, column=0, sticky="w", padx=10, pady=8)
+            camera_combo = ttk.Combobox(camera_tab, textvariable=self.camera_source_var, 
+                                       values=["webcam", "ipwebcam"], state="readonly", width=20)
+            camera_combo.grid(row=0, column=1, sticky="e", padx=10, pady=8)
+            
+            ttk.Label(camera_tab, text="IPWebcam URL").grid(row=1, column=0, sticky="w", padx=10, pady=8)
+            url_entry = ttk.Entry(camera_tab, textvariable=self.ipwebcam_url_var, width=30)
+            url_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=8)
+            url_entry.bind("<Return>", lambda _event: self.apply_values())
+            
+            camera_info = ttk.Label(camera_tab, text="Use 'webcam' for local USB camera\nor 'ipwebcam' with URL for IP camera", 
+                                   justify="left", foreground="gray")
+            camera_info.grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=20)
+
+            ttk.Checkbutton(
+                camera_tab,
+                text="No modo IPWebcam, seguir também a translação da cabeça",
+                variable=self.follow_head_translation_var,
+            ).grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=8)
             
             # Aba Advanced - Botão de reset
             reset_frame = ttk.LabelFrame(advanced_tab, text="Reset", padding=10)
@@ -399,6 +486,9 @@ class ConfigTabsPanel:
             self.config.invert_x = self.invert_x_var.get()
             self.config.invert_y = self.invert_y_var.get()
             self.config.invert_z = self.invert_z_var.get()
+            self.config.camera_source = self.camera_source_var.get()
+            self.config.ipwebcam_url = self.ipwebcam_url_var.get()
+            self.config.follow_head_translation = self.follow_head_translation_var.get()
 
             self.press_var.set(f"{self.config.pinch_press_threshold:.3f}")
             self.release_var.set(f"{self.config.pinch_release_threshold:.3f}")
@@ -463,6 +553,10 @@ class ConfigState:
         self.invert_x = False
         self.invert_y = False
         self.invert_z = False
+        # Fonte de câmera (webcam ou ipwebcam)
+        self.camera_source = "webcam"  # "webcam" ou "ipwebcam"
+        self.ipwebcam_url = "http://192.168.1.100:8080"
+        self.follow_head_translation = True
 
     def save_to_file(self):
         with self.lock:
@@ -486,6 +580,9 @@ class ConfigState:
                 "invert_x": self.invert_x,
                 "invert_y": self.invert_y,
                 "invert_z": self.invert_z,
+                "camera_source": self.camera_source,
+                "ipwebcam_url": self.ipwebcam_url,
+                "follow_head_translation": self.follow_head_translation,
             }
             try:
                 with open(CONFIG_FILE, "w") as f:
@@ -518,6 +615,9 @@ class ConfigState:
                         self.invert_x = config_data.get("invert_x", self.invert_x)
                         self.invert_y = config_data.get("invert_y", self.invert_y)
                         self.invert_z = config_data.get("invert_z", self.invert_z)
+                        self.camera_source = config_data.get("camera_source", self.camera_source)
+                        self.ipwebcam_url = config_data.get("ipwebcam_url", self.ipwebcam_url)
+                        self.follow_head_translation = config_data.get("follow_head_translation", self.follow_head_translation)
                     print(f"Config carregada de {CONFIG_FILE}")
             except Exception as e:
                 print(f"Erro ao carregar config: {e}")
@@ -550,11 +650,6 @@ def main():
     )
     detector = vision.HandLandmarker.create_from_options(options)
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        print("Erro ao abrir camera")
-        return
-
     last_time = time.time()
     fps = 0.0
 
@@ -579,14 +674,111 @@ def main():
     else:
         print("Painel de configuração indisponível; use o arquivo hand_tracker_config.json")
 
+    cap = None
+    current_camera_source = ""
+    current_ipwebcam_url = ""
+    last_reconnect_attempt = 0.0
+
+    def open_camera(selected_source, selected_ip_url):
+        nonlocal cap, current_camera_source, current_ipwebcam_url
+
+        if cap is not None:
+            cap.release()
+            cap = None
+
+        if selected_source == "ipwebcam":
+            stream_url = selected_ip_url.rstrip("/") + "/video"
+            print(f"Abrindo IPWebcam de: {selected_ip_url}")
+            trial_cap = LatestFrameCapture(stream_url)
+            if trial_cap.isOpened():
+                trial_cap.start()
+                cap = trial_cap
+                current_camera_source = "ipwebcam"
+                current_ipwebcam_url = selected_ip_url
+                if config_panel.enabled:
+                    config_panel.status_var.set("IPWebcam conectada")
+                return True
+
+            trial_cap.release()
+            print(f"Falha ao abrir IPWebcam ({selected_ip_url}), tentando webcam local...")
+
+            fallback_cap = LatestFrameCapture(args.camera)
+            if fallback_cap.isOpened():
+                fallback_cap.start()
+                cap = fallback_cap
+                current_camera_source = "webcam"
+                current_ipwebcam_url = selected_ip_url
+                with config.lock:
+                    config.camera_source = "webcam"
+                config.save_to_file()
+                if config_panel.enabled:
+                    config_panel.camera_source_var.set("webcam")
+                    config_panel.status_var.set("IPWebcam indisponível. Fallback para webcam")
+                print(f"Abrindo webcam: {args.camera}")
+                return True
+
+            fallback_cap.release()
+            if config_panel.enabled:
+                config_panel.status_var.set("Falha ao abrir IPWebcam e webcam")
+            print("Erro ao abrir câmera (IPWebcam e webcam)")
+            return False
+
+        webcam_cap = LatestFrameCapture(args.camera)
+        if webcam_cap.isOpened():
+            webcam_cap.start()
+            cap = webcam_cap
+            current_camera_source = "webcam"
+            current_ipwebcam_url = selected_ip_url
+            if config_panel.enabled:
+                config_panel.status_var.set("Webcam conectada")
+            print(f"Abrindo webcam: {args.camera}")
+            return True
+
+        webcam_cap.release()
+        if config_panel.enabled:
+            config_panel.status_var.set("Falha ao abrir webcam")
+        print(f"Erro ao abrir webcam local (ID {args.camera})")
+        return False
+
+    with config.lock:
+        desired_source = config.camera_source
+        desired_ip_url = config.ipwebcam_url
+    open_camera(desired_source, desired_ip_url)
+
     cv2.namedWindow("Hand Tracker", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Hand Tracker", 1280, 720)
 
     while True:
         config_panel.update_events()
 
+        with config.lock:
+            desired_source = config.camera_source
+            desired_ip_url = config.ipwebcam_url
+
+        if desired_source != current_camera_source or (desired_source == "ipwebcam" and desired_ip_url != current_ipwebcam_url):
+            open_camera(desired_source, desired_ip_url)
+
+        if cap is None:
+            now = time.time()
+            if now - last_reconnect_attempt > 2.0:
+                last_reconnect_attempt = now
+                open_camera(desired_source, desired_ip_url)
+
+            waiting_frame = np.zeros((480, 800, 3), dtype=np.uint8)
+            cv2.putText(waiting_frame, "Sem camera conectada", (20, 200),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+            cv2.putText(waiting_frame, "Ajuste Camera Source na GUI ou conecte a camera", (20, 250),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+            cv2.imshow("Hand Tracker", waiting_frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:
+                break
+            continue
+
         ret, frame = cap.read()
         if not ret:
+            cap.release()
+            cap = None
             time.sleep(0.01)
             continue
 
@@ -627,6 +819,7 @@ def main():
             inv_x = config.invert_x
             inv_y = config.invert_y
             inv_z = config.invert_z
+            follow_head_translation = config.follow_head_translation
 
         if results.hand_world_landmarks and results.handedness and results.hand_landmarks:
             for image_landmarks, world_landmarks, handedness in zip(
@@ -699,7 +892,9 @@ def main():
                 trigger_state[hand_tag] = pressed
                 trigger_distance[hand_tag] = distance
                 trigger_value = 1.0 if pressed else 0.0
-                send_pose(sock, addr, hand_tag, pos, quat, True, timestamp, trigger_value)
+                send_pose(sock, addr, hand_tag, pos, quat, True, timestamp, trigger_value,
+                          camera_on_head=(current_camera_source == "ipwebcam"),
+                          follow_head_translation=follow_head_translation)
 
                 if hand_tag == "L":
                     left_sent = True
@@ -729,11 +924,15 @@ def main():
         if not left_sent:
             trigger_state["L"] = False
             trigger_distance["L"] = 0.0
-            send_pose(sock, addr, "L", (0, 0, 0), (1, 0, 0, 0), False, timestamp, 0.0)
+            send_pose(sock, addr, "L", (0, 0, 0), (1, 0, 0, 0), False, timestamp, 0.0,
+                      camera_on_head=(current_camera_source == "ipwebcam"),
+                      follow_head_translation=follow_head_translation)
         if not right_sent:
             trigger_state["R"] = False
             trigger_distance["R"] = 0.0
-            send_pose(sock, addr, "R", (0, 0, 0), (1, 0, 0, 0), False, timestamp, 0.0)
+            send_pose(sock, addr, "R", (0, 0, 0), (1, 0, 0, 0), False, timestamp, 0.0,
+                      camera_on_head=(current_camera_source == "ipwebcam"),
+                      follow_head_translation=follow_head_translation)
 
         cv2.putText(frame, "MediaPipe Hands - Config & Smoothing", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
@@ -783,7 +982,8 @@ def main():
             calibrate_requested = False
 
     config_panel.close()
-    cap.release()
+    if cap is not None:
+        cap.release()
     cv2.destroyAllWindows()
 
 

@@ -153,10 +153,16 @@ def hand_pose_from_world_landmarks(world_landmarks):
     return wrist, (qw, qx, qy, qz)
 
 
-def send_pose(sock, addr, hand_tag, position, quat, valid, timestamp, trigger_value):
+def send_pose(sock, addr, hand_tag, position, quat, valid, timestamp, trigger_value,
+              camera_on_head=False, follow_head_translation=False):
     px, py, pz = position
     qw, qx, qy, qz = quat
-    msg = f"{hand_tag} {px:.6f} {py:.6f} {pz:.6f} {qw:.6f} {qx:.6f} {qy:.6f} {qz:.6f} {1 if valid else 0} {timestamp:.6f} {trigger_value:.3f}"
+    msg = (
+        f"{hand_tag} {px:.6f} {py:.6f} {pz:.6f} "
+        f"{qw:.6f} {qx:.6f} {qy:.6f} {qz:.6f} "
+        f"{1 if valid else 0} {timestamp:.6f} {trigger_value:.3f} "
+        f"{1 if camera_on_head else 0} {1 if follow_head_translation else 0}"
+    )
     sock.sendto(msg.encode("utf-8"), addr)
 
 

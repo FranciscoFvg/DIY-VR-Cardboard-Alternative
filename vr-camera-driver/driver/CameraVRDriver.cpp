@@ -211,9 +211,10 @@ void CameraVRDriver::TrackingLoop()
         if (!receiver_)
             break;
 
+        Pose6DoF headPose;
         if (hmd_ && arduinoHeadReceiver_)
         {
-            Pose6DoF headPose = arduinoHeadReceiver_->getLatestPose();
+            headPose = arduinoHeadReceiver_->getLatestPose();
             hmd_->UpdatePose(headPose);
         }
 
@@ -221,11 +222,28 @@ void CameraVRDriver::TrackingLoop()
         Pose6DoF rightPose = receiver_->getLatestPose(HandPoseReceiver::Hand::Right);
         float leftTrigger = receiver_->getLatestTrigger(HandPoseReceiver::Hand::Left);
         float rightTrigger = receiver_->getLatestTrigger(HandPoseReceiver::Hand::Right);
+        bool cameraHeadMounted = receiver_->isCameraHeadMounted();
+        bool followHeadTranslation = receiver_->isHeadTranslationFollowEnabled();
 
         if (VirtualController *leftController = GetController(0))
         {
             Pose6DoF pose = leftPose.valid ? poseEstimator_->transformToVRSpace(leftPose) : leftPose;
             pose = leftPose.valid ? leftFilter_->filterComplementary(pose, dt) : pose;
+
+            if (pose.valid && cameraHeadMounted && headPose.valid)
+            {
+                pose.position = headPose.rotation * pose.position;
+                if (followHeadTranslation)
+                {
+                    pose.position += headPose.position;
+                }
+                pose.rotation = headPose.rotation * pose.rotation;
+                pose.rotation.normalize();
+                pose.matrix = Eigen::Matrix4d::Identity();
+                pose.matrix.block<3, 3>(0, 0) = pose.rotation.toRotationMatrix();
+                pose.matrix.block<3, 1>(0, 3) = pose.position;
+            }
+
             leftController->UpdatePose(pose);
             leftController->UpdateTrigger(leftPose.valid ? leftTrigger : 0.0f);
         }
@@ -234,6 +252,21 @@ void CameraVRDriver::TrackingLoop()
         {
             Pose6DoF pose = rightPose.valid ? poseEstimator_->transformToVRSpace(rightPose) : rightPose;
             pose = rightPose.valid ? rightFilter_->filterComplementary(pose, dt) : pose;
+
+            if (pose.valid && cameraHeadMounted && headPose.valid)
+            {
+                pose.position = headPose.rotation * pose.position;
+                if (followHeadTranslation)
+                {
+                    pose.position += headPose.position;
+                }
+                pose.rotation = headPose.rotation * pose.rotation;
+                pose.rotation.normalize();
+                pose.matrix = Eigen::Matrix4d::Identity();
+                pose.matrix.block<3, 3>(0, 0) = pose.rotation.toRotationMatrix();
+                pose.matrix.block<3, 1>(0, 3) = pose.position;
+            }
+
             rightController->UpdatePose(pose);
             rightController->UpdateTrigger(rightPose.valid ? rightTrigger : 0.0f);
         }

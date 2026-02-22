@@ -74,6 +74,9 @@ bool enableYaw = true;
 bool enablePitch = true;
 bool enableRoll = true;
 
+// Wifi
+WiFiManager wm;
+
 void loadUdpConfig()
 {
   UdpConfig cfg;
@@ -311,6 +314,15 @@ void handleReset()
   server.send(303);
 }
 
+void handleResetWifi()
+{
+  wm.resetSettings();
+  server.send(200, "text/plain", "WiFi resetando...");
+  delay(1000);
+  ESP.restart();
+}
+
+
 void handleCalibrate()
 {
   String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>"
@@ -427,7 +439,7 @@ void setup()
   }
 
   // ===== WiFiManager =====
-  WiFiManager wm;
+  
   wm.setConfigPortalTimeout(180);
 
   if (!wm.autoConnect("HeadTracker-ESP8266"))
@@ -443,6 +455,7 @@ void setup()
   // Web server
   server.on("/", handleRoot);
   server.on("/reset", handleReset);
+  server.on("/resetWifi", handleResetWifi);
   server.on("/status", handleStatus);
   server.on("/setIP", handleSetIP);
   server.on("/calibrate", handleCalibrate);
